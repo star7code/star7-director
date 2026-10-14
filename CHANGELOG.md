@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.2.1 — 2026-10-15
+
+- Fix film assembly when clips have different audio rates, channel counts or missing audio; preserve compatible video without re-generation.
+- Preserve native model audio rate when encoding new clips.
+- Show all segmented exports with a compact playlist and preview navigation.
+- Save all exported clips or their ZIP package to a selected directory, with collision-safe names and cancellation handling.
+- Use the modern Windows folder picker for local downloads; avoid Electron's stuck browser picker and repeated submissions.
+- Export the current shot directly to the selected directory without an extra permanent output copy.
+- Keep the author's example workflow unchanged; exclude all local projects, media and caches.
+
 ## 0.2.0 — 2026-10-14
 
 - Author-provided Star7导演台.json replaces old unapproved examples; original layout and settings preserved.

@@ -41,13 +41,13 @@ def arguments(plan):
     if codec=='libx265':args+=['-tag:v','hvc1']
     return args
 
-def run(input_args,target,plan,copy=False):
+def run(input_args,target,plan,copy=False,codec_args=None):
     import imageio_ffmpeg,comfy.model_management
     target=Path(target);log=target.with_suffix(target.suffix+'.encode.log')
     try:
         with log.open('wb') as errors:
             command=[imageio_ffmpeg.get_ffmpeg_exe(),'-hide_banner','-v','error','-nostdin',*input_args]
-            command+=['-c','copy','-movflags','+faststart'] if copy else arguments(plan)
+            command+=codec_args if codec_args is not None else ['-c','copy','-movflags','+faststart'] if copy else arguments(plan)
             with subprocess.Popen([*command,str(target)],stdout=subprocess.DEVNULL,stderr=errors,creationflags=getattr(subprocess,'CREATE_NO_WINDOW',0)) as process:
                 try:
                     while True:

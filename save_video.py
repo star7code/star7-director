@@ -68,8 +68,11 @@ def encode_mp4(path,images,audio=None,frame_rate=24,crf=19):
             if not np.isfinite(waveform).all():raise ValueError('音频波形包含无效数值')
             if waveform.shape[1]:
                 layout='mono' if waveform.shape[0]==1 else 'stereo'
-                sound=container.add_stream('aac',rate=48000);sound.layout=layout;sound.bit_rate=192000
-                resampler=av.AudioResampler(format='fltp',layout=layout,rate=48000)
+                # Keep the model's native rate (H3 commonly supplies 32 kHz),
+                # matching the previous encoder rather than forcing 48 kHz.
+                encoding_rate=sample_rate if sample_rate in (8000,11025,12000,16000,22050,24000,32000,44100,48000,64000,88200,96000) else 48000
+                sound=container.add_stream('aac',rate=encoding_rate);sound.layout=layout;sound.bit_rate=192000
+                resampler=av.AudioResampler(format='fltp',layout=layout,rate=encoding_rate)
         for index in range(int(count)):
             import comfy.model_management
             comfy.model_management.throw_exception_if_processing_interrupted()

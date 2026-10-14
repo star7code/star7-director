@@ -62,4 +62,5 @@ class Star7DirectorVideoExport:
         entries=[info]
         if scope=='segments':
             entries=[{**info,'filename':p.name} for p in paths];result['files']=[p.name for p in paths]
+            result['items']=[{'filename':p.name,'shot_id':clip['id'],'name':clip['name']} for p,clip in zip(paths,selection['clips'])]
         return {'ui':{'gifs':entries,'star7_export':[result]},'result':(str(path.parent if scope=='segments' else path),)}

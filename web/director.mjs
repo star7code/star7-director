@@ -1,3 +1,5 @@
+import {chooseDirectory,saveResponse,saveNative} from './export-save.mjs?v=20261015-native3';
+import {mountExportResults} from './export-results.mjs?v=20261015-native3';
 import {mountQueueView} from './queue-view.mjs?v=20261014-audit1';
 import {mountProjectManager} from './project-manager.mjs?v=20261014-audit2';
 import {mountPlaylistPreview} from './playlist-preview.mjs?v=20261013-monotone-post1';
@@ -362,7 +364,8 @@ $('global-close').onclick=()=>$('global-dialog').close();
 $('asset-close').onclick=()=>$('asset-dialog').close();
 $('asset-dialog').onclose=()=>{if($('asset-dialog').open)return;for(const media of $('asset-dialog').querySelectorAll('audio,video'))media.pause();pendingVoice=null;uploadedMedia=null;editingAsset=null};
 
-$('export-shot').onclick=()=>{if(!exportReady||!plan.shots[selected])return;parent.postMessage({type:'star7-director-export-shot',plan:structuredClone(plan),shotId:plan.shots[selected].id},location.origin)};
+let currentExportPending=false;
+$('export-shot').onclick=async()=>{if(currentExportPending||!exportReady||!plan.shots[selected])return;currentExportPending=true;const current=structuredClone(plan),shot=current.shots[selected];try{const directory=await chooseDirectory();if(directory.native){notice('请选择视频保存目录…');notice(await saveNative({scope:'one',project_id:current.id,shot_id:shot.id,export_settings:current.export_settings||{},title:current.title,shot}));return}notice('正在将当前镜头保存到所选目录…');const response=await fetch('/star7/director/download-current/'+encodeURIComponent(current.id)+'/'+encodeURIComponent(shot.id),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({export_settings:current.export_settings||{},title:current.title,shot})});const disposition=response.headers.get('Content-Disposition')||'',encoded=disposition.match(/filename\*=UTF-8''([^;]+)/i);const filename=encoded?decodeURIComponent(encoded[1]):shot.id+'.mp4';await saveResponse(directory,filename,response);notice('当前镜头已下载到：'+directory.name+'。原视频保留，未在导出目录新增副本。')}catch(error){notice(error.name==='AbortError'?'已取消选择目录':error.message,error.name!=='AbortError')}finally{currentExportPending=false}};
 $('export-segments').onclick=()=>{if(parent===window){notice('请从 ComfyUI 导演台中导出。',true);return}parent.postMessage({type:'star7-director-export-segments',plan:structuredClone(plan)},location.origin)};
 $('combine').onclick=()=>{if(parent===window){notice('请从 ComfyUI 导演台中合并。',true);return}parent.postMessage({type:'star7-director-combine',plan:JSON.parse(JSON.stringify(plan))},location.origin)};
 
@@ -535,10 +538,7 @@ function renderChangeDetails(){const shot=plan.shots[selected],state=shotStates.
 function applyShotStates(states){for(const [id,state] of Object.entries(states||{}))shotStates.set(id,state);drawShots();renderChangeDetails();}
 
 
-let exportedVideo=null;
-window.addEventListener('message',e=>{if(e.origin!==location.origin||e.source!==parent||e.data?.type!=='star7-director-export-result')return;exportedVideo=e.data;$('export-result-video').src=e.data.url;$('export-result-message').textContent=e.data.message;$('export-result-location').textContent=(e.data.assets_enabled?'已进入 ComfyUI 资产；可按文件名查找：':'已保存到 ComfyUI 输出目录：')+(e.data.subfolder?e.data.subfolder+'/':'')+(e.data.scope==='segments'?e.data.files.length+' 个分段视频':e.data.filename);$('export-result-dialog').showModal()});
-$('export-result-close').onclick=()=>{$('export-result-video').pause();$('export-result-dialog').close()};
-$('export-result-download').onclick=()=>{if(exportedVideo)parent.postMessage({type:'star7-director-download-export',url:exportedVideo.download_url,filename:exportedVideo.filename},location.origin)};
+mountExportResults();
 
 let tailFrameRevision=0;
 function renderInputMode(){

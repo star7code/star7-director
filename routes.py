@@ -424,6 +424,39 @@ async def download_shot(request):
         return video_download(record['path'],request.query.get('name',__import__('pathlib').Path(record['path']).name))
     except (ValueError,OSError) as e:return web.json_response({'error':str(e)},status=400)
 
+@PromptServer.instance.routes.post('/star7/director/download-current/{pid}/{sid}')
+async def download_current(request):
+    import asyncio,tempfile,urllib.parse
+    from pathlib import Path
+    from .core import identifier
+    from .export_settings import settings,extension,needs_encoding,export_clip
+    temporary=None
+    try:
+        pid=identifier(request.match_info['pid']);sid=identifier(request.match_info['sid']);body=await request.json()
+        plan={'id':pid,'title':body.get('title',pid),'shots':[body.get('shot',{'id':sid})],'export_settings':body.get('export_settings',{})};settings(plan)
+        record=Storage(DATA).latest_output(pid,sid)
+        if not record:raise ValueError('当前镜头尚未生成视频')
+        source=Path(record['path']).resolve();root=Path(folder_paths.get_output_directory()).resolve()
+        if not source.is_relative_to(root) or not source.is_file():raise ValueError('当前镜头成品不可用')
+        name=source.stem+'.'+extension(plan);path=source
+        if needs_encoding(plan):
+            folder=DATA/'packages';folder.mkdir(parents=True,exist_ok=True)
+            with tempfile.NamedTemporaryFile(prefix='current-download-',suffix='.'+extension(plan),dir=folder,delete=False) as file:temporary=Path(file.name)
+            worker=asyncio.create_task(asyncio.to_thread(export_clip,source,temporary,plan))
+            try:await asyncio.shield(worker)
+            except asyncio.CancelledError:await worker;raise
+            path=temporary
+        response=web.StreamResponse(headers={'Content-Type':'video/webm' if extension(plan)=='webm' else 'video/mp4','Content-Length':str(path.stat().st_size),'Content-Disposition':"attachment; filename*=UTF-8''"+urllib.parse.quote(name),'Cache-Control':'no-store'})
+        await response.prepare(request)
+        with path.open('rb') as file:
+            while chunk:=await asyncio.to_thread(file.read,1024*1024):await response.write(chunk)
+        await response.write_eof();return response
+    except (ValueError,OSError) as e:
+        if 'response' in locals() and response.prepared:raise
+        return web.json_response({'error':str(e)},status=400)
+    finally:
+        if temporary is not None:temporary.unlink(missing_ok=True)
+
 @PromptServer.instance.routes.get('/star7/director/download-film/{pid}/{filename}')
 async def download_film(request):
     import pathlib,re
@@ -436,6 +469,69 @@ async def download_film(request):
             path=pathlib.Path(folder_paths.get_output_directory())/'Star7-Director'/pid/name
         return video_download(path,request.query.get('name',pathlib.Path(path).name))
     except (ValueError,OSError) as e:return web.json_response({'error':str(e)},status=400)
+
+@PromptServer.instance.routes.post('/star7/director/save-native')
+async def save_native_export(request):
+    import asyncio,ipaddress
+    from urllib.parse import urlsplit
+    from .export_delivery import save_native
+    try:
+        if not request.remote or not ipaddress.ip_address(request.remote).is_loopback:raise ValueError('原生目录选择仅支持服务器本机，请在 Chrome／Edge 中下载')
+        origin=request.headers.get('Origin')
+        if not origin or urlsplit(origin).netloc.lower()!=request.host.lower():raise ValueError('请从本机 ComfyUI 页面操作')
+        body=await request.json()
+        worker=asyncio.create_task(asyncio.to_thread(save_native,DATA,folder_paths.get_output_directory(),body))
+        try:result=await asyncio.shield(worker)
+        except asyncio.CancelledError:await worker;raise
+        return web.json_response(result)
+    except (ValueError,OSError,TypeError) as e:return web.json_response({'error':str(e)},status=400)
+
+@PromptServer.instance.routes.post('/star7/director/export-action/{pid}/{filename}')
+async def export_action(request):
+    import asyncio,ipaddress
+    from urllib.parse import urlsplit
+    from .export_delivery import export_files,copy_to_downloads,open_directory,open_video
+    try:
+        if not request.remote or not ipaddress.ip_address(request.remote).is_loopback:raise ValueError('此操作仅支持服务器本机；远程访问请使用 ZIP 下载')
+        origin=request.headers.get('Origin')
+        if not origin or urlsplit(origin).netloc.lower()!=request.host.lower():raise ValueError('请从本机 ComfyUI 页面操作')
+        anchor,paths,grouped=export_files(DATA,folder_paths.get_output_directory(),request.match_info['pid'],request.match_info['filename'])
+        body=await request.json()
+        if body.get('action')=='open':
+            await asyncio.to_thread(open_directory,anchor);return web.json_response({'message':'已打开导出文件夹'})
+        if body.get('action')=='play':
+            await asyncio.to_thread(open_video,anchor);return web.json_response({'message':'已用系统播放器打开当前视频'})
+        if body.get('action')=='downloads':
+            target=await asyncio.to_thread(copy_to_downloads,anchor,paths,grouped)
+            return web.json_response({'message':'已将 '+str(len(paths))+' 个视频保存到下载目录','directory':str(target),'count':len(paths)})
+        raise ValueError('导出操作无效')
+    except (ValueError,OSError) as e:return web.json_response({'error':str(e)},status=400)
+
+@PromptServer.instance.routes.get('/star7/director/download-export-zip/{pid}/{filename}')
+async def download_export_zip(request):
+    import asyncio,tempfile,urllib.parse
+    from pathlib import Path
+    from .export_delivery import export_files,build_archive
+    target=None
+    try:
+        anchor,paths,grouped=export_files(DATA,folder_paths.get_output_directory(),request.match_info['pid'],request.match_info['filename'])
+        if not grouped:raise ValueError('此导出不是分段或合并文件夹')
+        folder=DATA/'packages';folder.mkdir(parents=True,exist_ok=True)
+        with tempfile.NamedTemporaryFile(prefix='export-download-',suffix='.zip',dir=folder,delete=False) as file:target=Path(file.name)
+        worker=asyncio.create_task(asyncio.to_thread(build_archive,target,anchor,paths))
+        try:await asyncio.shield(worker)
+        except asyncio.CancelledError:
+            await worker;raise
+        response=web.StreamResponse(headers={'Content-Type':'application/zip','Content-Disposition':"attachment; filename*=UTF-8''"+urllib.parse.quote(anchor.parent.name+'.zip'),'Content-Length':str(target.stat().st_size),'Cache-Control':'no-store'})
+        await response.prepare(request)
+        with target.open('rb') as file:
+            while chunk:=await asyncio.to_thread(file.read,1024*1024):await response.write(chunk)
+        await response.write_eof();return response
+    except (ValueError,OSError) as e:
+        if 'response' in locals() and response.prepared:raise
+        return web.json_response({'error':str(e)},status=400)
+    finally:
+        if target is not None:target.unlink(missing_ok=True)
 
 @PromptServer.instance.routes.post('/star7/director/storyboard/recognize')
 async def recognize_storyboard(request):
