@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 1254 1254" role="img" aria-labelledby="title desc">
+  <title id="title">Star7</title>
+  <desc id="desc">A folded white four-point star with a curved black negative space, on a rounded black tile.</desc>
+  <defs>
+    <linearGradient id="background" x1="60" y1="62" x2="1194" y2="1189" gradientUnits="userSpaceOnUse"><stop stop-color="#101010"/><stop offset="1" stop-color="#080808"/></linearGradient>
+    <linearGradient id="upper" x1="663" y1="296" x2="584" y2="516" gradientUnits="userSpaceOnUse"><stop stop-color="#fffdfa"/><stop offset=".53" stop-color="#f7f6f3"/><stop offset="1" stop-color="#c6c6c4"/></linearGradient>
+    <linearGradient id="left" x1="260" y1="589" x2="446" y2="612" gradientUnits="userSpaceOnUse"><stop stop-color="#fffdfa"/><stop offset=".55" stop-color="#f3f2ef"/><stop offset="1" stop-color="#a9a9a7"/></linearGradient>
+    <linearGradient id="lower" x1="625" y1="712" x2="510" y2="950" gradientUnits="userSpaceOnUse"><stop stop-color="#969694"/><stop offset=".28" stop-color="#d0d0cd"/><stop offset=".65" stop-color="#f7f6f3"/><stop offset="1" stop-color="#fffdfa"/></linearGradient>
+    <linearGradient id="right" x1="929" y1="584" x2="729" y2="824" gradientUnits="userSpaceOnUse"><stop stop-color="#fffdfa"/><stop offset=".57" stop-color="#f8f7f4"/><stop offset="1" stop-color="#d9d9d6"/></linearGradient>
+    <linearGradient id="ribbon" x1="440" y1="405" x2="705" y2="814" gradientUnits="userSpaceOnUse"><stop stop-color="#fffefa"/><stop offset=".6" stop-color="#fffdfa"/><stop offset="1" stop-color="#f5f4f1"/></linearGradient>
+  </defs>
+  <rect x="60" y="62" width="1134" height="1127" rx="260" fill="url(#background)"/>
+  <path d="M627 198 C714 337 739 443 894 524 C978 563 1069 591 1069 627 C1069 662 961 704 884 747 C765 813 705 928 627 1055 C551 935 490 791 313 711 C253 685 185 656 185 627 C185 591 283 553 341 522 C469 454 546 322 627 198Z" fill="#fffdfa"/>
+  <path d="M627 198 C714 337 739 443 894 524 C808 515 721 522 638 516 C564 510 509 464 525 399 C543 326 589 258 627 198Z" fill="url(#upper)"/>
+  <path d="M447 447 C397 493 365 511 341 522 C283 553 185 591 185 627 C185 656 253 685 313 711 C424 727 548 717 661 711 C532 671 429 624 410 563 C399 526 416 488 447 447Z" fill="url(#left)"/>
+  <path d="M313 711 C424 727 548 717 661 711 C736 741 760 786 736 858 C712 934 666 995 627 1055 C551 935 490 791 313 711Z" fill="url(#lower)"/>
+  <path d="M638 516 C721 522 808 515 894 524 C978 563 1069 591 1069 627 C1069 662 961 704 884 747 C793 798 746 879 683 975 C772 879 844 797 843 717 C843 612 744 552 638 516Z" fill="url(#right)"/>
+  <path d="M627 198 C556 299 491 384 447 447 C416 488 399 526 410 563 C429 624 532 671 661 711 C736 735 775 813 683 975 C730 897 758 827 747 774 C735 718 692 686 621 655 C541 620 502 566 509 492 C515 386 567 293 627 198Z" fill="url(#ribbon)"/>
+  <path d="M570 290 C542 338 523 380 523 418 C521 468 556 506 638 530 C754 565 830 637 841 697 C854 774 808 841 683 975 C727 899 754 829 749 784 C743 718 694 677 621 646 C545 613 503 557 505 492 C506 414 533 343 570 290Z" fill="url(#background)"/>
+</svg>

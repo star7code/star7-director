@@ -1,0 +1,283 @@
+{
+  "308": {
+    "class_type": "KSamplerSelect",
+    "inputs": {
+      "sampler_name": "euler"
+    }
+  },
+  "126": {
+    "class_type": "BasicScheduler",
+    "inputs": {
+      "scheduler": "simple",
+      "steps": 4,
+      "denoise": 1,
+      "model": [
+        "601",
+        0
+      ]
+    }
+  },
+  "128": {
+    "class_type": "BasicGuider",
+    "inputs": {
+      "model": [
+        "606",
+        0
+      ],
+      "conditioning": [
+        "601",
+        1
+      ]
+    }
+  },
+  "131": {
+    "class_type": "RandomNoise",
+    "inputs": {
+      "noise_seed": [
+        "601",
+        4
+      ]
+    }
+  },
+  "127": {
+    "class_type": "SamplerCustomAdvanced",
+    "inputs": {
+      "noise": [
+        "131",
+        0
+      ],
+      "guider": [
+        "128",
+        0
+      ],
+      "sampler": [
+        "308",
+        0
+      ],
+      "sigmas": [
+        "126",
+        0
+      ],
+      "latent_image": [
+        "601",
+        2
+      ]
+    }
+  },
+  "376": {
+    "class_type": "MiniMaxH3OneClickHDStar7",
+    "inputs": {
+      "enable_hd": [
+        "601",
+        5
+      ],
+      "upscale_model": "h3_upscaler_lms_v0.1.safetensors",
+      "second_pass_lora": "继承一采",
+      "second_pass_lora_strength": 1,
+      "second_pass_attention": "继承一采",
+      "preset": "自定义",
+      "target_megapixels": 2,
+      "refine_steps": 2,
+      "refine_strength": 0.3,
+      "seed": [
+        "601",
+        4
+      ],
+      "enable_tiling": true,
+      "tile_count": 4,
+      "tile_overlap": 128,
+      "sampled_av_latent": [
+        "602",
+        0
+      ],
+      "h3_context": [
+        "601",
+        3
+      ]
+    }
+  },
+  "395": {
+    "class_type": "MiniMaxH3FaceRefineLatentStar7",
+    "inputs": {
+      "enable_refine": [
+        "601",
+        6
+      ],
+      "face_detector": "face_yolov8m.pt",
+      "face_lora": "继承一采",
+      "face_lora_strength": 1,
+      "face_attention": "继承一采",
+      "face_count": 1,
+      "preset": "远景小脸",
+      "target_face": "主人物",
+      "refine_steps": 4,
+      "custom_strength": 0.48,
+      "custom_canvas": "768",
+      "custom_crop_context": 2.4,
+      "custom_blend": 0.95,
+      "custom_feather": 18,
+      "seed": [
+        "601",
+        4
+      ],
+      "preserve_repair_detail": true,
+      "sampled_av_latent": [
+        "376",
+        0
+      ],
+      "refine_context": [
+        "601",
+        3
+      ]
+    }
+  },
+  "377": {
+    "class_type": "MiniMaxH3ChunkedDecodeStar7",
+    "inputs": {
+      "av_latent": [
+        "395",
+        0
+      ],
+      "video_vae": [
+        "121",
+        0
+      ],
+      "audio_vae": [
+        "122",
+        0
+      ]
+    }
+  },
+  "150": {
+    "class_type": "Star7DirectorSaveVideo",
+    "inputs": {
+      "frame_rate": 24,
+      "loop_count": 0,
+      "filename_prefix": [
+        "601",
+        7
+      ],
+      "pingpong": false,
+      "save_output": true,
+      "images": [
+        "603",
+        0
+      ],
+      "audio": [
+        "603",
+        1
+      ],
+      "format": "video/h264-mp4",
+      "pix_fmt": "yuv420p",
+      "crf": 19,
+      "save_metadata": false,
+      "director_plan": [
+        "600",
+        0
+      ],
+      "shot_id": "shot_001"
+    }
+  },
+  "601": {
+    "class_type": "Star7DirectorConditioning",
+    "inputs": {
+      "shot_id": "shot_001",
+      "director_plan": [
+        "600",
+        0
+      ],
+      "model": [
+        "363",
+        0
+      ],
+      "clip": [
+        "130",
+        0
+      ],
+      "video_vae": [
+        "121",
+        0
+      ],
+      "audio_vae": [
+        "122",
+        0
+      ]
+    }
+  },
+  "602": {
+    "class_type": "Star7DirectorBaseCache",
+    "inputs": {
+      "shot_id": [
+        "601",
+        8
+      ],
+      "latent": [
+        "127",
+        0
+      ],
+      "director_plan": [
+        "600",
+        0
+      ]
+    }
+  },
+  "603": {
+    "class_type": "Star7DirectorTrim",
+    "inputs": {
+      "shot_id": [
+        "601",
+        8
+      ],
+      "images": [
+        "377",
+        0
+      ],
+      "audio": [
+        "377",
+        1
+      ],
+      "director_plan": [
+        "600",
+        0
+      ]
+    }
+  },
+  "604": {
+    "class_type": "Star7DirectorComplete",
+    "inputs": {
+      "shot_id": [
+        "601",
+        8
+      ],
+      "filenames": [
+        "150",
+        0
+      ],
+      "director_plan": [
+        "600",
+        0
+      ],
+      "frame_count": [
+        "603",
+        2
+      ]
+    }
+  },
+  "606": {
+    "class_type": "Star7DirectorSamplingModel",
+    "inputs": {
+      "model": [
+        "601",
+        0
+      ],
+      "latent": [
+        "601",
+        2
+      ],
+      "sigmas": [
+        "126",
+        0
+      ]
+    }
+  }
+}

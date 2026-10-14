@@ -1,0 +1,7 @@
+// The browser only observes the server-owned project queue.
+export function createBatchClient({startRequest,fetchState,fetchProject,controlRequest,onState,onQueued,onError,interval=1000}){
+ let id=null,token=0,timer=null;
+ const busy=r=>r&&['queued','running'].includes(r.status);
+ async function watch(current,project){const version=++token;let previous=id;while(version===token){try{const r=project?await fetchProject(project):await fetchState(current);if(version!==token)return;if(!r)return;if(previous&&previous!==r.id){const ended=await fetchState(previous);if(version!==token)return;onState({...ended,transition_only:true})}previous=r.id;id=r.id;onState(r);if(!busy(r)&&!r.pending_runs?.length)return}catch(e){if(version!==token)return;onError(e)}await new Promise(resolve=>{timer=setTimeout(resolve,interval)})}}
+ return {async start(body){const r=await startRequest(body);if(r.predecessor_id)onQueued?.(r);else{id=r.id;onState(r)}watch(r.id,fetchProject?r.project_id:null);return r},async restore(project){const r=await fetchProject(project);if(r){let parent=r.predecessor_id;const ancestors=[];while(parent){const old=await fetchState(parent);ancestors.push(old);parent=old.predecessor_id}for(const old of ancestors.reverse())onState({...old,transition_only:true});id=r.id;onState(r);if(busy(r)||r.pending_runs?.length)watch(r.id,project)}return r},async stopAfter(shot){if(!id)throw Error('没有运行中的任务');const r=await controlRequest(id,shot);onState(r);return r},dispose(){token++;clearTimeout(timer)}};
+}

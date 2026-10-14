@@ -1,0 +1,6 @@
+aiohttp
+numpy
+Pillow
+av
+safetensors
+imageio-ffmpeg
