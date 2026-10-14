@@ -1,4 +1,4 @@
-"""Canvas director: expand the existing registered pipeline, no duplicate sampler."""
+"""Two-node director with a private execution plan, not extra canvas nodes."""
 import copy,json
 from pathlib import Path
 from .core import validate,compile_plan
@@ -6,6 +6,25 @@ from .core import validate,compile_plan
 TEMPLATE=Path(__file__).with_name('pipeline.json')
 
 def template():return json.loads(TEMPLATE.read_text(encoding='utf-8'))
+
+class Star7DirectorPlan:
+    """Private plan value; deliberately absent from NODE_CLASS_MAPPINGS."""
+    @classmethod
+    def INPUT_TYPES(cls):return {'required':{'project_json':('STRING',)}}
+    FUNCTION='build'
+    def build(self,project_json):return (validate(json.loads(project_json)),)
+
+class _Step:
+    def __init__(self,plan,key,class_type,inputs):self.plan=plan;self.key=key;self.spec={'class_type':class_type,'inputs':inputs}
+    def out(self,index):return [self.key,index]
+    def set_input(self,name,value):self.spec['inputs'][name]=value
+
+class _ExecutionPlan:
+    def __init__(self,prefix):self.prefix=prefix;self.steps={}
+    def node(self,class_type,id,**inputs):
+        step=_Step(self,self.prefix+id,class_type,inputs);self.steps[id]=step;return step
+    def lookup_node(self,key):return self.steps[key]
+    def finalize(self):return {step.key:step.spec for step in self.steps.values()}
 
 def merge_library(plan,library):
     result=copy.deepcopy(plan)
@@ -30,11 +49,11 @@ def preview_spec(plan):
     return {'class_type':'MiniMaxH3LivePreviewStar7','inputs':{'model':['363',0],**values}}
 
 def internal_graph(plan,shot_id,ports,prefix):
-    from comfy_execution.graph_utils import GraphBuilder,is_link
+    from comfy_execution.graph_utils import is_link
     from .runtime import registry
     plan=merge_library(plan,None)
     if shot_id not in {s['id'] for s in plan['shots']}:raise ValueError('请选择一个已有镜头')
-    graph=GraphBuilder(prefix=prefix)
+    graph=_ExecutionPlan(prefix=prefix)
     full_specs=template();specs=copy.deepcopy(full_specs)
     preview=preview_spec(plan)
     if preview['inputs']['preview_enabled']:
@@ -60,9 +79,6 @@ def internal_graph(plan,shot_id,ports,prefix):
     for key,spec in specs.items():
         cls=registry(spec['class_type'])
         defs=cls.INPUT_TYPES();definitions={**defs.get('required',{}),**defs.get('optional',{})}
-        if spec['class_type'] in ('VHS_VideoCombine','Star7DirectorSaveVideo'):
-            fmt=definitions.get('format',('',{}))[1].get('formats',{}).get(spec['inputs']['format'],[])
-            definitions.update({item[0]:item[1:] for item in fmt})
         for name in spec['inputs']:
             if name not in definitions:raise ValueError('节点接口需要适配：'+spec['class_type']+' / '+name)
         graph.node(spec['class_type'],id=key)
@@ -81,10 +97,56 @@ def internal_graph(plan,shot_id,ports,prefix):
             target.set_input(name,value)
     return graph.finalize(),graph.lookup_node('604').out(0)
 
+def validate_execution_plan(graph):
+    from .runtime import registry
+    from comfy_execution.graph_utils import is_link
+    for key,spec in graph.items():
+        definitions=registry(spec['class_type']).INPUT_TYPES()
+        definitions={**definitions.get('required',{}),**definitions.get('optional',{})}
+        for name,value in spec['inputs'].items():
+            if is_link(value):continue
+            definition=definitions[name];kind=definition[0];limits=definition[1] if len(definition)>1 else {}
+            if isinstance(kind,list) and value not in kind:raise ValueError('内部设置不支持该选项：'+name+' = '+str(value))
+            if kind in ('INT','FLOAT'):
+                if isinstance(value,bool) or not isinstance(value,(int,float)) or kind=='INT' and not isinstance(value,int):raise ValueError('内部设置需要有效数字：'+name)
+                if value<limits.get('min',value) or value>limits.get('max',value):raise ValueError('内部设置超出范围：'+name)
+            if kind=='BOOLEAN' and not isinstance(value,bool):raise ValueError('内部设置需要布尔值：'+name)
+
+def execute_internal(graph,result,plan,shot_id,prompt=None):
+    from .runtime import registry,unpack
+    from comfy_execution.graph_utils import is_link
+    import comfy.model_management
+    values={};ui={};active=set()
+    def resolve(value):return run(value[0])[value[1]] if is_link(value) and value[0] in graph else value
+    def run(key):
+        if key in values:return values[key]
+        if key in active:raise ValueError('导演台内部执行计划存在循环')
+        active.add(key);spec=graph[key];cls=registry(spec['class_type']);obj=cls()
+        try:
+            comfy.model_management.throw_exception_if_processing_interrupted()
+            lazy=spec['class_type']=='Star7DirectorBaseCache' and not obj.check_lazy_status(plan,shot_id,prompt=prompt)
+            inputs={name:resolve(value) for name,value in spec['inputs'].items() if not (lazy and name=='latent')}
+            hidden=cls.INPUT_TYPES().get('hidden',{})
+            for name,kind in hidden.items():
+                if kind=='PROMPT':inputs[name]=prompt
+                elif kind=='UNIQUE_ID':inputs[name]=key
+            output=getattr(obj,cls.FUNCTION)(**inputs)
+            if isinstance(output,dict):
+                for name,items in output.get('ui',{}).items():ui.setdefault(name,[]).extend(items)
+            values[key]=unpack(output);return values[key]
+        except Exception as error:
+            if isinstance(error,comfy.model_management.InterruptProcessingException):raise
+            labels={'601':'素材与H3条件','127':'一采','376':'高清二采','395':'人脸修复','377':'音视频解码','150':'MP4编码'}
+            label=labels.get(key.rsplit('.',1)[-1],spec['class_type'])
+            raise ValueError('导演台 '+label+' 失败：'+str(error)) from error
+        finally:active.remove(key)
+    report=resolve(result)
+    return {'result':(report,),'ui':ui}
+
 class Star7DirectorDesk:
     @classmethod
     def INPUT_TYPES(cls):
-        return {'required':{'model':('MODEL',{'rawLink':True}),'clip':('CLIP',{'rawLink':True}),'video_vae':('VAE',{'rawLink':True}),'audio_vae':('VAE',{'rawLink':True}),'project_json':('STRING',{'multiline':True,'default':'{"schema_version":"1.0","id":"project","assets":[],"shots":[]}'})},'optional':{'asset_library':('STAR7_DIRECTOR_ASSET_LIBRARY',)},'hidden':{'unique_id':'UNIQUE_ID','prompt':'PROMPT'}}
+        return {'required':{'project_json':('STRING',{'multiline':True,'default':'{"schema_version":"1.0","id":"project","assets":[],"shots":[]}'})},'optional':{'model':('MODEL',),'clip':('CLIP',),'video_vae':('VAE',),'audio_vae':('VAE',),'asset_library':('STAR7_DIRECTOR_ASSET_LIBRARY',)},'hidden':{'unique_id':'UNIQUE_ID','prompt':'PROMPT'}}
     RETURN_TYPES=('STRING',)
     RETURN_NAMES=('运行报告',)
     OUTPUT_NODE=True
@@ -92,17 +154,23 @@ class Star7DirectorDesk:
     CATEGORY='Star7/导演台'
     @classmethod
     def IS_CHANGED(cls,**kwargs):return float('nan')
-    def generate(self,model,clip,video_vae,audio_vae,project_json,asset_library=None,unique_id=None,prompt=None):
-        plan=merge_library(json.loads(project_json),asset_library)
+    def generate(self,project_json,model=None,clip=None,video_vae=None,audio_vae=None,asset_library=None,unique_id=None,prompt=None):
+        document=json.loads(project_json)
+        if document.get('star7_action')=='export':
+            from .export_node import Star7DirectorVideoExport
+            return Star7DirectorVideoExport().save(document['export_json'])
+        if any(value is None for value in (model,clip,video_vae,audio_vae)):raise ValueError('生成需要连接模型、文本编码器、视频 VAE 和音频 VAE；导出已有视频不需要这些输入')
+        plan=merge_library(document,asset_library)
         compile_plan(plan)
         shot_id=plan.get('runtime',{}).get('active_shot_id') or (plan['shots'][0]['id'] if plan['shots'] else None)
+        if shot_id is None:raise ValueError('请先添加镜头')
         from .continuity import check_dependency
         if plan.get('runtime',{}).get('scope')!='process':check_dependency(plan,shot_id,prompt)
         if plan.get('runtime',{}).get('scope')=='process':
             from .runtime import Star7DirectorBaseCache
             if Star7DirectorBaseCache().find(plan,shot_id,prompt)[0] is None:raise ValueError('没有与当前参数匹配的基础缓存，请先生成当前镜头')
         graph,result=internal_graph(plan,shot_id,dict(model=model,clip=clip,video_vae=video_vae,audio_vae=audio_vae),str(unique_id)+'.director.'+str(plan.get('runtime',{}).get('request_nonce','manual'))+'.')
-        return {'result':(result,),'expand':graph}
+        return execute_internal(graph,result,plan,shot_id,prompt)
 
 class Star7DirectorLibrary:
     @classmethod

@@ -281,7 +281,7 @@ async def start(body):
     import folder_paths
     plan=copy.deepcopy(body['plan']);validate(plan);owner=str(body['owner_id']);prepared=copy.deepcopy(body['prepared']);scope=body.get('scope','all')
     if scope not in ('all','one','process','selected'):raise ValueError('不支持的生成范围')
-    if owner not in prepared.get('output',{}) or prepared['output'][owner]['class_type'] not in ('Star7DirectorDesk','Star7DirectorPlan'):raise ValueError('缺少导演台节点')
+    if owner not in prepared.get('output',{}) or prepared['output'][owner]['class_type']!='Star7DirectorDesk':raise ValueError('缺少导演台工作站节点')
     with LOCK:
         existing=[r for r in RUNS.values() if r['project_id']==plan['id'] and r['status'] in ('queued','running')]
     errors=preflight(plan,folder_paths.get_input_directory())

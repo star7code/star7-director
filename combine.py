@@ -36,23 +36,24 @@ def assembly_message(selection,stale=(),preview=False):
     return message
 
 def combine(plan,pipeline,output_root,selection=None):
-    import imageio_ffmpeg
+    from .export_settings import extension,needs_encoding,run
+    suffix=extension(plan)
     store=Storage(data_root());selection=selection or select_clips(plan,output_root);paths=[c['path'] for c in selection['clips']]
     if not paths:raise ValueError('没有可合并镜头')
     first=profile(paths[0])
     if any(profile(p)!=first for p in paths[1:]):raise ValueError('镜头分辨率或编码不一致，请先统一输出设置；原有镜头已保留')
-    from .output_paths import reserve_film
-    token=uuid.uuid4().hex[:12];listing=data_root()/('concat_'+token+'.txt');target=reserve_film(output_root);temp=target.with_name(target.stem+'.'+token+'.tmp.mp4');completed=False
+    from .output_paths import reserve_export_directory
+    directory=reserve_export_directory(output_root,plan.get('title') or plan['id'],'合并导出')
+    token=uuid.uuid4().hex[:12];listing=data_root()/('concat_'+token+'.txt');target=directory/('final-film-'+token+'.'+suffix);temp=target.with_name(target.stem+'.tmp.'+suffix);completed=False
     try:
         listing.write_text(''.join("file '"+str(p).replace('\\','/').replace("'","'\\''")+"'\n" for p in paths),encoding='utf-8')
-        result=subprocess.run([imageio_ffmpeg.get_ffmpeg_exe(),'-v','error','-f','concat','-safe','0','-i',str(listing),'-c','copy','-movflags','+faststart',str(temp)],capture_output=True,creationflags=getattr(subprocess,'CREATE_NO_WINDOW',0))
-        if result.returncode:raise ValueError('合并未完成，单段文件已保留')
+        run(['-f','concat','-safe','0','-i',str(listing)],temp,plan,copy=not needs_encoding(plan))
         temp.replace(target)
         completed=True;store.record_film(plan['id'],target)
         return target
     finally:
         listing.unlink(missing_ok=True);temp.unlink(missing_ok=True)
-        if not completed:target.unlink(missing_ok=True)
+        if not completed:target.unlink(missing_ok=True);directory.rmdir()
 
 def outdated_shots(plan,pipeline):
     store=Storage(data_root());result=[]

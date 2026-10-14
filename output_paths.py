@@ -7,15 +7,29 @@ def output_prefix(title,now=None):
     title=re.sub(r'[<>:"/\\|?*\x00-\x1f]','_',str(title)).strip(' .')[:60] or 'video'
     return 'Star7-Director/'+moment.strftime('%Y-%m-%d')+'/S7D-'+moment.strftime('%Y%m%d-%H%M%S')+'-'+title
 
-def reserve_film(output_root,title='final-film'):
+def reserve_film(output_root,title='final-film',extension='mp4'):
     from pathlib import Path
     prefix=Path(output_root)/output_prefix(title);prefix.parent.mkdir(parents=True,exist_ok=True)
     n=0
     while True:
-        path=prefix.with_name(prefix.name+(('-'+str(n+1)) if n else '')+'.mp4')
+        if extension not in ('mp4','webm'):raise ValueError('导出扩展名无效')
+        path=prefix.with_name(prefix.name+(('-'+str(n+1)) if n else '')+'.'+extension)
         try:
             with path.open('xb'):pass
             return path
+        except FileExistsError:n+=1
+
+def reserve_export_directory(output_root,title,kind):
+    from pathlib import Path
+    if kind not in ('分段导出','合并导出'):raise ValueError('导出分类无效')
+    now=datetime.now(timezone(timedelta(hours=8)))
+    safe=re.sub(r'[<>:"/\\|?*\x00-\x1f]','_',str(title)).strip(' .')[:60] or '未命名项目'
+    name=safe+'-'+kind+'-'+now.strftime('%Y%m%d-%H%M%S-%f')
+    base=Path(output_root)/'Star7-Director'/now.strftime('%Y-%m-%d');base.mkdir(parents=True,exist_ok=True)
+    n=0
+    while True:
+        directory=base/(name+(('-'+str(n)) if n else ''))
+        try:directory.mkdir();return directory
         except FileExistsError:n+=1
 
 def shot_code(shot_id):

@@ -6,13 +6,13 @@ from .core import _compile_shot,dependency_source
 PREFIX='v4:'
 
 def snapshot(plan,sid):
-    from .runtime import generation_identity,media_revision
+    from .runtime import generation_identity
     value=_compile_shot(generation_identity(plan),sid,parameter_payload=True)
     post=value['shot'].get('post',{})
-    value['generation']={k:v for k,v in plan.get('generation',{}).items()
-        if k not in ('150','377') and not (k=='376' and not post.get('hd') or k=='395' and not post.get('face'))}
-    value['media_revision']=media_revision(plan,sid)
-    # JSON roundtrip makes persisted lists and current stat tuples identical.
+    value={k:value[k] for k in ('shot','assets','first_from_previous') if k in value}
+    value['generation']={'395':{'face_count':plan.get('generation',{}).get('395',{}).get('face_count',1)}} if post.get('face') else {}
+    # Saved v4 snapshots remain readable through the explicit projection below.
+    # File stat revisions belong exclusively to execution/cache fingerprints.
     return json.loads(json.dumps(value,ensure_ascii=False))
 
 def source_revision(plan,sid):
@@ -81,61 +81,99 @@ def baseline(plan,sid,record):
         except (OSError,ValueError,TypeError,KeyError):continue
     return None
 
-LABELS={'shot':'镜头','prompt':'提示词','seed':'种子','duration':'时长','input_mode':'输入模式',
-    'post':'后处理','hd':'高清二采','face':'人脸修复','face_count':'修脸人数','continuity':'连续性',
-    'mode':'模式','source_shot':'参考镜头','frame':'参考帧','keyframes':'首尾帧','first':'首帧','last':'尾帧',
-    'assets':'引用素材','references':'素材引用','media_revision':'素材文件版本','settings':'画面规格',
-    'width':'宽度','height':'高度','fps':'帧率','generation':'导演台生成设置','376':'二采参数','395':'修脸参数',
-    'av_handoff':'镜头衔接','reference_size':'参考素材尺寸','prompt_options':'提示词选项',
-    'media':'素材媒体','source':'文件','description':'素材描述','kind':'素材类型','text_file':'文本文件',
-    'steps':'采样步数','denoise':'去噪强度','scheduler':'调度方式','sampler_name':'采样器','126':'采样参数','308':'采样器',
-    'no_subtitles':'强调无字幕','no_background_music':'强调无背景音乐',
-    'first_from_previous':'使用上段尾帧','tail_reference':'参考画面','audio':'延续音频','redraw':'重绘幅度','context_frames':'上下文帧数'}
-
-def differences(old,new,path=()):
-    if old==new:return []
-    if path==('assets',) and isinstance(old,list) and isinstance(new,list):
-        return differences({v['id']:v for v in old},{v['id']:v for v in new},path)
-    if isinstance(old,dict) and isinstance(new,dict):
-        return [row for key in sorted(old.keys()|new.keys()) for row in differences(old.get(key),new.get(key),(*path,key))]
-    label=' / '.join(LABELS.get(str(k),str(k)) for k in path)
-    def display(v):
-        if v is None:return '未设置'
-        if isinstance(v,bool):return '开启' if v else '关闭'
-        text=str(v) if not isinstance(v,(list,dict)) else json.dumps(v,ensure_ascii=False)
-        return text if len(text)<=100 else text[:97]+'…'
-    return [{'field':'.'.join(path),'label':label,'before':display(old),'after':display(new)}]
-
 CONTINUITY_NAMES={'independent':'独立镜头','motion_guide':'运动引导','motion_redraw':'运动引导＋重绘',
     'tail_reference':'尾帧画面参考','selected_frame':'选定画面参考','previous_latent':'运动引导'}
 
-def visible_changes(old,new):
-    """Group mode selection and its generated reference/handoff fields as one edit."""
-    rows=differences(old,new)
-    old_post=old.get('shot',{}).get('post') or {}
-    new_post=new.get('shot',{}).get('post') or {}
-    # Inactive post settings are absent from the saved generation snapshot.
-    # Enabling a pass exposes its configured settings at the same time; that
-    # is one user action, not a second independent parameter edit.
-    for flag,node in (('hd','376'),('face','395')):
-        if not old_post.get(flag) and new_post.get(flag):
-            rows=[row for row in rows if not row['field'].startswith('generation.'+node)]
-    before=old.get('shot',{}).get('continuity') or {'mode':'independent'}
-    after=new.get('shot',{}).get('continuity') or {'mode':'independent'}
-    if before!=after:
+def editable_inputs(value):
+    """Explicit user choices only; compiler/cache metadata is never an edit."""
+    shot=value.get('shot') or {};post=shot.get('post') or {}
+    smart=shot.get('input_mode','reference')=='keyframes'
+    mode=(shot.get('continuity') or {}).get('mode','independent')
+    mode='motion_guide' if mode=='previous_latent' else mode
+    continuity={'mode':mode if not smart else 'independent'}
+    if not smart and mode!='independent':
+        continuity['source_shot']=shot.get('continuity',{}).get('source_shot')
+        if mode=='selected_frame':continuity['frame']=shot.get('continuity',{}).get('frame',0)
+    frames={}
+    if smart:
+        for slot in ('first','last'):
+            frame=(shot.get('keyframes') or {}).get(slot) or {}
+            if frame.get('from_previous'):
+                frames[slot]={'from_previous':True,'source_shot':value.get('first_from_previous')}
+            elif frame.get('source'):frames[slot]={'source':frame['source']}
+    assets={}
+    def selected_media(item):
+        result={k:item[k] for k in ('type','source') if k in item}
+        if item.get('type') in ('audio','video'):
+            result.update(start_seconds=item.get('start_seconds',0),duration_seconds=item.get('duration_seconds',6))
+        return result
+    for card in value.get('assets',[]):
+        media=[selected_media(m)
+               for m in card.get('media',[]) if not smart or m.get('type')=='audio']
+        # Keyframe mode does not consume the prompt's image/video references.
+        # A character image still matters when it is used for face repair.
+        if smart and post.get('face') and card.get('kind')=='character':
+            media=[selected_media(m) for m in card.get('media',[])]
+        if media or not card.get('media'):
+            assets[card['id']]={'media':media,'description':card.get('description',''),
+                                'voice_id':card.get('voice_id') or None}
+    return {'duration':shot.get('duration',5),'seed':shot.get('seed',0),'prompt':shot.get('prompt',''),
+            'input_mode':'keyframes' if smart else 'reference','continuity':continuity,'keyframes':frames,
+            'references':sorted(shot.get('references') or []),'assets':assets,
+            'post':{'hd':bool(post.get('hd')),'face':bool(post.get('face')),
+                    'face_count':post.get('face_count',value.get('generation',{}).get('395',{}).get('face_count',1)) if post.get('face') else None},
+            'prompt_options':{k:bool(shot.get('prompt_options',{}).get(k)) for k in ('no_subtitles','no_background_music')}}
+
+def visible_changes(old,new,names=None):
+    """One readable row per editable choice, never a recursive payload dump."""
+    before=editable_inputs(old);after=editable_inputs(new);rows=[];names=names or {}
+    def add(field,label,a,b):
+        rows.append({'field':field,'label':label,'before':str(a),'after':str(b)})
+    for key,label in (('duration','镜头 / 时长'),('seed','镜头 / 种子')):
+        if before[key]!=after[key]:
+            suffix=' 秒' if key=='duration' else ''
+            add('shot.'+key,label,str(before[key])+suffix,str(after[key])+suffix)
+    if before['prompt']!=after['prompt']:
+        add('shot.prompt','提示词','原提示词','提示词内容已修改')
+    mode_changed=before['input_mode']!=after['input_mode']
+    if mode_changed:
+        labels={'reference':'参考模式','keyframes':'智能首尾帧模式'}
+        add('shot.input_mode','输入模式',labels[before['input_mode']],labels[after['input_mode']])
+    elif before['continuity']!=after['continuity']:
         def describe(value):
-            mode=value.get('mode','independent');name=CONTINUITY_NAMES.get(mode,mode)
-            if mode!='independent':
-                source=value.get('source_shot')
-                if source:name+='（参考 '+source+(' 的第 '+str(value.get('frame',0))+' 帧' if mode=='selected_frame' else ' 的画面')+'）'
+            mode=value['mode'];name=CONTINUITY_NAMES.get(mode,mode);source=value.get('source_shot')
+            if source:name+='（参考 '+source+(' 的第 '+str(value.get('frame',0))+' 帧' if mode=='selected_frame' else ' 的画面')+'）'
             return name
-        # These compiled fields are consequences of the same choice, not
-        # separate edits a user can independently make in this panel.
-        hidden_prefixes=('shot.continuity','av_handoff','tail_reference','first_from_previous')
-        rows=[r for r in rows if not r['field'].startswith(hidden_prefixes)]
-        if old.get('reference_size') is None and new.get('reference_size') is not None:
-            rows=[r for r in rows if r['field']!='reference_size']
-        rows.insert(0,{'field':'shot.continuity','label':'连续性','before':describe(before),'after':describe(after)})
+        add('shot.continuity','连续性',describe(before['continuity']),describe(after['continuity']))
+    for slot,label in (('first','首帧'),('last','尾帧')):
+        a=before['keyframes'].get(slot);b=after['keyframes'].get(slot)
+        if a==b or mode_changed and not (a or b):continue
+        def describe(frame):
+            return '未设置' if not frame else '使用上段视频尾帧' if frame.get('from_previous') else '已指定图片'
+        add('shot.keyframes.'+slot,label,describe(a),'已更换图片' if a and b and a.get('source') and b.get('source') else describe(b))
+    if not mode_changed:
+        if before['references']!=after['references']:
+            add('shot.references','素材引用','原引用列表','引用列表已修改')
+        for aid in sorted(before['assets'].keys()|after['assets'].keys()):
+            a=before['assets'].get(aid);b=after['assets'].get(aid)
+            if a==b:continue
+            label='引用素材 / '+names.get(aid,'素材')
+            if a is None or b is None:
+                add('assets.'+aid,label,'未引用' if a is None else '已引用','未引用' if b is None else '已引用')
+            elif a['media']!=b['media']:
+                add('assets.'+aid+'.media',label,'原素材文件或片段','素材文件或片段已更换')
+            elif a['voice_id']!=b['voice_id']:
+                add('assets.'+aid+'.voice_id','音色绑定 / '+names.get(aid,'素材'),'原绑定音色','绑定音色已修改')
+            else:
+                add('assets.'+aid+'.description','素材描述 / '+names.get(aid,'素材'),'原素材描述','素材描述已修改')
+    for flag,label in (('hd','高清二采'),('face','人脸修复')):
+        if before['post'][flag]!=after['post'][flag]:
+            add('shot.post.'+flag,label,'开启' if before['post'][flag] else '关闭','开启' if after['post'][flag] else '关闭')
+    if before['post']['face'] and after['post']['face'] and before['post']['face_count']!=after['post']['face_count']:
+        add('shot.post.face_count','修脸人数',str(before['post']['face_count'])+' 人',str(after['post']['face_count'])+' 人')
+    for key,label in (('no_subtitles','强调无字幕'),('no_background_music','强调无背景音乐')):
+        if before['prompt_options'][key]!=after['prompt_options'][key]:
+            add('shot.prompt_options.'+key,label,'开启' if before['prompt_options'][key] else '关闭','开启' if after['prompt_options'][key] else '关闭')
     return rows
 
 def details(plan,sid,record):
@@ -143,7 +181,7 @@ def details(plan,sid,record):
     old=baseline(plan,sid,record)
     if old is None:return {'changes':[],'reference_changed':False,'baseline_unknown':True}
     changed=source_changed(plan,sid,old.get('source'))
-    changes=visible_changes(old['inputs'],snapshot(plan,sid))
+    changes=visible_changes(old['inputs'],snapshot(plan,sid),{a['id']:a['name'] for a in plan.get('assets',[])})
     if changed and uses_previous_tail(plan,sid):
         changes.append({'field':'shot.keyframes.first.from_previous.source_version','label':'首帧 / 上段视频尾帧',
                         'before':'原参考画面','after':'上段镜头已重新生成，当前镜头尚未更新'})

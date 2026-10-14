@@ -18,10 +18,18 @@ class Tests(unittest.TestCase):
   result=module.recognize(plan(),json.dumps({'shots':[{'duration':10,'mode':'I','prompt':prompt}]}),'replace');self.assertTrue(result['valid'],result['errors']);self.assertEqual(result['count'],1);self.assertEqual(len(result['candidate']['shots']),1);self.assertEqual(result['total_duration'],10);self.assertIn('[Shot 2] At 00:05.000',result['rows'][0]['model_prompt']);self.assertIn('<Picture 1>',result['rows'][0]['model_prompt']);self.assertIn('<d>[Chinese] 我们开始吧。</d>',result['rows'][0]['model_prompt'])
  def test_import_mode_codes(self):
   p=plan();text='{"shots":[{"duration":3,"mode":"I","prompt":"garden"},{"duration":3,"mode":"R","prompt":"continue garden"}]}'
-  result=module.recognize(p,text,'replace');self.assertTrue(result['valid'],result);a,b=result['candidate']['shots'];self.assertEqual(a['continuity'],{'mode':'independent'});self.assertEqual(b['continuity'],{'mode':'motion_redraw','source_shot':a['id']})
+  result=module.recognize(p,text,'replace');self.assertTrue(result['valid'],result);a,b=result['candidate']['shots'];self.assertEqual(a['continuity'],{'mode':'independent'});self.assertEqual(b['continuity'],{'mode':'motion_guide','source_shot':a['id']})
   result=module.recognize(p,'{"shots":[{"duration":3,"mode":"R","prompt":"continue"}]}','replace');self.assertFalse(result['valid']);self.assertIn('第一个镜头',result['errors'][0]['message'])
   result=module.recognize(p,'{"shots":[{"duration":3,"mode":"R","prompt":"continue"}]}','append');self.assertTrue(result['valid']);self.assertEqual(result['candidate']['shots'][-1]['continuity']['source_shot'],p['shots'][-1]['id'])
   result=module.recognize(p,'{"shots":[{"duration":3,"mode":"X","prompt":"continue"}]}');self.assertFalse(result['valid'])
+ def test_default_guide_explicit_redraw_and_export_preserved(self):
+  import json
+  p=plan()
+  result=module.recognize(p,json.dumps({'shots':[{'duration':3,'prompt':'continue'}]}));self.assertTrue(result['valid']);self.assertEqual(result['candidate']['shots'][-1]['continuity']['mode'],'motion_guide')
+  for code,expected in (('MOTION_GUIDE','motion_guide'),('MOTION_REDRAW','motion_redraw')):
+   result=module.recognize(p,json.dumps({'shots':[{'duration':3,'mode':code,'prompt':'continue'}]}));self.assertTrue(result['valid']);self.assertEqual(result['candidate']['shots'][-1]['continuity']['mode'],expected)
+  exported=copy.deepcopy(p);exported['shots'].append({'id':'shot_014','duration':3,'prompt':'continue','continuity':{'mode':'motion_redraw','source_shot':'shot_013'}})
+  result=module.recognize(p,json.dumps(exported),'replace');self.assertTrue(result['valid']);self.assertEqual(result['candidate']['shots'][-1]['continuity']['mode'],'motion_redraw')
  def test_fence_alias_text_binding_and_no_mutation(self):
   import json
   p=plan();before=copy.deepcopy(p);text='```json\n'+json.dumps({'shots':[{'duration':3.5,'prompt':'@{光线} @小红.'},{'时长':'2.5秒','提示词':'@{actor} smiles.'}]},ensure_ascii=False)+'\n```'

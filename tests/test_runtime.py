@@ -22,7 +22,7 @@ class Tests(unittest.TestCase):
    merged=movie.combine(plan,{},output)
    self.assertTrue(merged.is_file());self.assertTrue((output/'s1.mp4').is_file());self.assertTrue((output/'s2.mp4').is_file())
    self.assertEqual(movie.profile(merged)[:3],('h264',32,32))
-   self.assertRegex(merged.parent.name,r'^\d{4}-\d{2}-\d{2}$');self.assertRegex(merged.name,r'^S7D-\d{8}-\d{6}-final-film(?:-\d+)?\.mp4$');self.assertEqual(store.film_path(plan['id'],merged.name),str(merged))
+   self.assertRegex(merged.parent.name,r'^film_test-合并导出-\d{8}-\d{6}-\d{6}(?:-\d+)?$');self.assertRegex(merged.name,r'^final-film-[0-9a-f]{12}\.mp4$');self.assertEqual(store.film_path(plan['id'],merged.name),str(merged))
    plan['shots'][0]['duration']=2
    self.assertEqual(movie.outdated_shots(plan,{}),['s1']);self.assertTrue(movie.combine(plan,{},output).is_file())
    plan['shots'][0]['duration']=1;self.assertEqual(movie.outdated_shots(plan,{}),[])

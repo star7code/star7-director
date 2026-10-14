@@ -3,6 +3,18 @@ from pathlib import Path
 ROOT=Path(__file__).resolve().parents[1];sys.path.insert(0,str(ROOT));pkg=types.ModuleType('management_tests');pkg.__path__=[str(ROOT)];sys.modules[pkg.__name__]=pkg
 cache=importlib.import_module(pkg.__name__+'.cache_management');naming=importlib.import_module(pkg.__name__+'.naming')
 class Tests(unittest.TestCase):
+ def test_selected_projects_only_and_validation_before_delete(self):
+  with tempfile.TemporaryDirectory(dir=ROOT) as temp:
+   root=Path(temp);store=cache.Storage(root);files={}
+   for pid in ('current','other','keep'):
+    p=root/pid/'shot'/'base'/'v.safetensors';p.parent.mkdir(parents=True);p.write_bytes(b'cache');files[pid]=p
+    with store.db(pid) as db:db.execute('INSERT INTO stages VALUES (?,?,?,?,?,?)',(pid,'shot','base','v','fp',str(p.relative_to(root))))
+    video=root/(pid+'.mp4');video.write_bytes(b'video');store.record_output(pid,'shot','fp',str(video),24)
+   with self.assertRaises(ValueError):cache.clear(root,'current','selected_checkpoints',project_ids=['other','not_real'])
+   self.assertTrue(all(p.exists() for p in files.values()))
+   result=cache.clear(root,'current','selected_checkpoints',project_ids=['other']);self.assertEqual(result['freed_bytes'],5);self.assertFalse(files['other'].exists());self.assertTrue(files['current'].exists());self.assertTrue(files['keep'].exists())
+   cache.clear(root,'current','selected_checkpoints',project_ids=['current']);self.assertFalse(files['current'].exists());self.assertTrue(files['keep'].exists())
+   for pid in files:self.assertEqual((root/(pid+'.mp4')).read_bytes(),b'video');self.assertIsNotNone(store.latest_output(pid,'shot'))
  def test_other_projects_and_current_project_are_separate(self):
   with tempfile.TemporaryDirectory(dir=ROOT) as temp:
    root=Path(temp);store=cache.Storage(root);files={}

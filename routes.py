@@ -131,18 +131,20 @@ async def project_status(request):
             identifier(shot['id'])
             record=store.latest_output(plan['id'],shot['id'])
             has_output=bool(record and Path(record['path']).resolve().is_relative_to(Path(folder_paths.get_output_directory()).resolve()) and Path(record['path']).is_file())
-            problem='';changes={}
+            problem='';changes={};valid=has_output;batch_valid=has_output;base=None
             try:
                 from .parameter_state import details
                 changes=details(plan,shot['id'],record) if has_output else {}
                 valid=bool(has_output and parameter_matches(plan,shot['id'],pipeline,record))
                 batch_valid=valid or bool(has_output and parameter_matches(batch_plan(plan,shot['id'],record),shot['id'],pipeline,record))
+            except (ValueError,TypeError,KeyError,OSError) as error:problem=str(error)
+            try:
                 base,_=Star7DirectorBaseCache().find(plan,shot['id'],pipeline)
-            except (ValueError,TypeError,KeyError,OSError) as error:valid=False;batch_valid=False;base=None;problem=str(error)
+            except (ValueError,TypeError,KeyError,OSError) as error:problem=problem or str(error)
             reason='缓存已清除，请重新生成当前镜头以建立缓存，再执行二采／人脸修复' if not base and store.cache_was_cleared(plan['id'],shot['id']) else '没有与当前参数匹配的基础缓存，请先生成当前镜头'
             result[shot['id']]={'complete':valid,'batch_complete':batch_valid,'stale':has_output and not batch_valid,'parameters_changed':has_output and not valid,'preserves_post':has_output and batch_valid and not valid,'frames':record['frame_count'] if record else None,'has_output':has_output,'base_available':base is not None,'base_reason':problem or ('' if base else reason)}
             result[shot['id']].update(changes)
-            if problem:result[shot['id']]['changes']=[{'label':'素材或镜头设置检查','before':'','after':problem}]
+            if problem:result[shot['id']]['resource_problem']=problem
         return web.json_response(result)
     except (ValueError,TypeError,KeyError,OSError) as e:return web.json_response({'error':str(e)},status=400)
 
@@ -402,7 +404,7 @@ async def clear_cache(request):
         from .batch_runner import active
         if running or pending or active():raise ValueError('任务运行中，请完成后再清理缓存')
         body=await request.json()
-        return web.json_response(await asyncio.to_thread(clear,DATA,request.match_info['project'],body.get('kind'),body.get('package_id'),body.get('active_sources',[])))
+        return web.json_response(await asyncio.to_thread(clear,DATA,request.match_info['project'],body.get('kind'),body.get('package_id'),body.get('active_sources',[]),body.get('project_ids')))
     except Exception as e:return web.json_response({'error':str(e)},status=400)
 
 def video_download(path,name):

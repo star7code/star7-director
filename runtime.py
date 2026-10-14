@@ -1,4 +1,4 @@
-"""Explicit adapters to registered Star7 nodes; no private sampler."""
+"""Director runtime and adapters to its bundled H3 implementations."""
 import hashlib
 import json
 from pathlib import Path
@@ -17,6 +17,9 @@ def postprocess_source(plan,source_shot):
     return {'path':path,'record':record,'id':source_shot}
 
 def registry(name):
+    from .backend import implementation
+    internal=implementation(name)
+    if internal is not None:return internal
     import nodes as comfy_nodes
     cls=comfy_nodes.NODE_CLASS_MAPPINGS.get(name)
     if cls is None:raise ValueError('请安装或启用节点：'+name)
@@ -161,32 +164,28 @@ def output_matches(plan,shot_id,prompt,record):
 def parameter_matches(plan,shot_id,prompt,record):
     """Own generation settings only; changing an upstream result is not an edit."""
     if not record:return False
-    from .parameter_state import baseline,snapshot,source_changed,uses_previous_tail
+    from .parameter_state import baseline,snapshot,visible_changes,source_changed,uses_previous_tail
     saved_inputs=baseline(plan,shot_id,record)
     if saved_inputs is not None:
-        return saved_inputs['inputs']==snapshot(plan,shot_id) and not (
+        return not visible_changes(saved_inputs['inputs'],snapshot(plan,shot_id)) and not (
             uses_previous_tail(plan,shot_id) and source_changed(plan,shot_id,saved_inputs.get('source')))
     expected='v3:'+run_fingerprint(plan,shot_id,prompt,parameter_only=True)
     saved=record.get('parameter_fingerprint')
-    if saved and (saved.startswith('v3:') or saved==expected[3:]):return saved==expected or saved==expected[3:]
-    saved=None
-    store=Storage(data_root())
-    if output_matches(plan,shot_id,prompt,record):saved=expected
-    else:
-        # Older results retain their submitted plan in server-owned task records.
-        for path in sorted((data_root()/'projects'/plan['id']/'batches').glob('*.json'),reverse=True):
-            try:
-                task=json.loads(path.read_text(encoding='utf-8'))
-                result=task.get('results',{}).get(shot_id,{})
-                if result.get('path')!=record.get('path') or not result.get('prompt_id'):continue
-                saved='v3:'+run_fingerprint(task['plan'],shot_id,task['prepared']['output'],parameter_only=True)
-                break
-            except (OSError,ValueError,KeyError,TypeError):continue
-    if saved:
-        with store.db(plan['id']) as db:db.execute('UPDATE outputs SET parameter_fingerprint=? WHERE project=? AND shot=? AND fingerprint=?',(saved,plan['id'],shot_id,record['fingerprint']))
-        record['parameter_fingerprint']=saved
-        return saved==expected
-    return False
+    if saved and (saved.startswith('v3:') or saved==expected[3:]):
+        if saved==expected or saved==expected[3:]:
+            from .parameter_state import encode
+            record['parameter_fingerprint']=encode(plan,shot_id)
+            if record.get('path'):
+                store=Storage(data_root())
+                with store.db(plan['id']) as db:
+                    db.execute('UPDATE outputs SET parameter_fingerprint=? WHERE project=? AND shot=? AND fingerprint=?',
+                               (record['parameter_fingerprint'],plan['id'],shot_id,record['fingerprint']))
+        # An opaque legacy hash cannot identify a user edit. Retain the result
+        # until a readable baseline is available; execution caches stay strict.
+        return True
+    # No readable historical plan means no evidence of a particular edit.
+    # Never fall back to the execution/cache hash to paint an orange warning.
+    return True
 
 
 def batch_plan(plan,shot_id,record):
@@ -408,7 +407,7 @@ class Star7DirectorTrim:
 
 class Star7DirectorComplete:
     @classmethod
-    def INPUT_TYPES(cls):return {'required':{'filenames':('VHS_FILENAMES',),'director_plan':('STAR7_DIRECTOR_PLAN',),'shot_id':('STRING',{'default':'shot_001'}),'frame_count':('INT',)},'hidden':{'prompt':'PROMPT'}}
+    def INPUT_TYPES(cls):return {'required':{'filenames':('STAR7_DIRECTOR_VIDEO',),'director_plan':('STAR7_DIRECTOR_PLAN',),'shot_id':('STRING',{'default':'shot_001'}),'frame_count':('INT',)},'hidden':{'prompt':'PROMPT'}}
     RETURN_TYPES=('STRING',)
     FUNCTION='finish'
     OUTPUT_NODE=True

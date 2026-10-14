@@ -82,15 +82,15 @@ def recognize(plan,text,mode='append',reserved_ids=()):
             prompt=MENTION.sub(canonical,prompt)
             previous=[*existing,*shots]
             code=values.get('mode','R' if previous else 'I')
-            if not isinstance(code,str):raise ValueError('mode只能是I（独立）、R（运动引导＋重绘）或F（尾帧画面参考）')
+            if not isinstance(code,str):raise ValueError('mode只能是I（独立）、R（运动引导）或F（尾帧画面参考）')
             code=code.strip().upper()
             frame_modes={'S':'first','E':'last','SE':'both','FIRST_FRAME':'first','LAST_FRAME':'last','FIRST_LAST_FRAMES':'both'}
-            if code not in ('I','R','F','INDEPENDENT','MOTION_REDRAW','TAIL_REFERENCE',*frame_modes):raise ValueError('mode支持I、R、F，以及S首帧、E尾帧、SE首尾帧')
+            if code not in ('I','R','F','INDEPENDENT','MOTION_GUIDE','MOTION_REDRAW','TAIL_REFERENCE',*frame_modes):raise ValueError('mode支持I、R、F，以及S首帧、E尾帧、SE首尾帧')
             if any(k in values for k in ('first_frame','last_frame')) and code not in frame_modes:raise ValueError('首尾帧字段需要使用S、E或SE模式')
             continuity={'mode':'independent'}
-            if code in ('R','MOTION_REDRAW','F','TAIL_REFERENCE'):
+            if code in ('R','MOTION_GUIDE','MOTION_REDRAW','F','TAIL_REFERENCE'):
                 if not previous:raise ValueError('第一个镜头没有前段可参考，请使用mode="I"')
-                continuity={'mode':'tail_reference' if code in ('F','TAIL_REFERENCE') else 'motion_redraw','source_shot':previous[-1]['id']}
+                continuity={'mode':'tail_reference' if code in ('F','TAIL_REFERENCE') else 'motion_redraw' if code=='MOTION_REDRAW' else 'motion_guide','source_shot':previous[-1]['id']}
             shot={'id':sid,'name':name,'duration':duration,'prompt':prompt,'seed':666,'seed_control':'increment','continuity':continuity,'post':{'hd':False,'face':False}}
             if code in frame_modes:
                 needed=('first_frame',) if frame_modes[code]=='first' else ('last_frame',) if frame_modes[code]=='last' else ('first_frame','last_frame')

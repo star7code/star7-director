@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.2.0 — 2026-10-14
+
+- Author-provided Star7导演台.json replaces old unapproved examples; original layout and settings preserved.
+- Exactly two public Director nodes; private bundled H3 implementation and native encoding, without VHS.
+- Fix workflow tab removal, panel reattachment and delayed-state isolation; export history keeps the real canvas.
+- Explicit shot-parameter comparison and revert detection; external model/LoRA changes do not dirty all shots.
+- Right-click shot insertion, segmented export and separate timestamped export folders.
+- Export-only format/FPS/quality/bitrate/audio settings; defaults preserve existing clips.
+- Select project caches for manual deletion while retaining videos and materials.
+- Detail preset uses eight steps; storyboard R and exported Skills use Motion Guide.
+- Extended CPU, native video and isolated browser regressions.
+
+
 ## 0.1.0 — 2026-10-14
 
 First public preview of Star7 Director for ComfyUI and MiniMax H3.
@@ -11,6 +24,6 @@ First public preview of Star7 Director for ComfyUI and MiniMax H3.
 - Independent shots, continuity references and deferred previous-tail keyframes.
 - Parameter-change details, reference-change notices and conservative result reuse.
 - Reusable continuous preview, individual exports and merged-film export.
-- Folded-star SVG branding, portable public workflow templates and CPU regression tests.
+- Folded-star SVG branding and CPU regression tests. The old development workflow examples were withdrawn from main before v0.2.0.
 
 Release source excludes all local projects, caches, logs, media, weights and generated outputs.

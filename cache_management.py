@@ -73,7 +73,7 @@ def stats(root,project,active_sources=()):
         projects.append({'id':pid,'name':title,'bytes':amount,'current':pid==project})
     return {'temporary_bytes':sum(size(p) for p in stale_packages(root)),'checkpoint_bytes':checkpoints,'other_checkpoint_bytes':sum(p['bytes'] for p in projects if not p['current']),'projects':projects,'material_bytes':size(root/'media'),'packages':[{k:v for k,v in p.items() if k not in ('paths','materials')} for p in package_groups(root,active_sources)]}
 
-def clear(root,project,kind,pack_id=None,active_sources=()):
+def clear(root,project,kind,pack_id=None,active_sources=(),project_ids=None):
     root=Path(root).resolve();project=identifier(project);freed=0
     if kind in ('package','packages'):
         groups=package_groups(root,active_sources)
@@ -102,9 +102,18 @@ def clear(root,project,kind,pack_id=None,active_sources=()):
             freed+=size(path)
             if path.is_dir():shutil.rmtree(path)
             else:path.unlink(missing_ok=True)
-    elif kind in ('checkpoints','other_checkpoints'):
+    elif kind in ('checkpoints','other_checkpoints','selected_checkpoints'):
         store=Storage(root)
         pids=[project] if kind=='checkpoints' else [pid for pid in store.projects() if pid!=project]
+        if kind=='selected_checkpoints':
+            if not isinstance(project_ids,list) or not project_ids or len(project_ids)>1000:raise ValueError('请先选择需要删除缓存的项目')
+            pids=list(dict.fromkeys(identifier(pid) for pid in project_ids))
+            if set(pids)-set(store.projects()):raise ValueError('所选项目不存在，已停止清理')
+            # Validate every selected project's paths before deleting any file.
+            for pid in pids:
+                for row in store.stages(pid):
+                    path=(root/row['artifact']).resolve()
+                    if row['stage'] not in STAGES or path.suffix!='.safetensors' or not (path.is_relative_to(root/pid) or path.is_relative_to(root/'projects'/pid/'cache')):raise ValueError('缓存路径无效，已停止清理')
         for project_id in pids:
             with store.db(project_id) as db:
                 rows=db.execute('SELECT project,shot,stage,version,artifact FROM stages WHERE project=? ORDER BY rowid',(project_id,)).fetchall()

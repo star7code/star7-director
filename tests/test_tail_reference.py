@@ -22,7 +22,7 @@ class Tests(unittest.TestCase):
    with self.assertRaisesRegex(ValueError,'Unknown material'):core.compile_shot(p,'b')
  def test_import_virtual_reference_and_explicit_mode(self):
   p=plan();result=story.recognize(p,'{"shots":[{"duration":3,"mode":"F","prompt":"Use @{尾帧} for a new close-up."}]}');self.assertTrue(result['valid'],result['errors']);self.assertIn('@{尾帧}',result['candidate']['shots'][-1]['prompt']);self.assertIn('<Picture 1>',result['rows'][0]['model_prompt'])
-  result=story.recognize(p,'{"shots":[{"duration":3,"mode":"R","prompt":"Ignore @{尾帧}."}]}');self.assertTrue(result['valid'],result['errors']);self.assertIn('@{尾帧}',result['rows'][0]['model_prompt']);self.assertEqual(result['rows'][0]['media_counts']['image'],0);self.assertEqual(result['candidate']['shots'][-1]['continuity']['mode'],'motion_redraw')
+  result=story.recognize(p,'{"shots":[{"duration":3,"mode":"R","prompt":"Ignore @{尾帧}."}]}');self.assertTrue(result['valid'],result['errors']);self.assertIn('@{尾帧}',result['rows'][0]['model_prompt']);self.assertEqual(result['rows'][0]['media_counts']['image'],0);self.assertEqual(result['candidate']['shots'][-1]['continuity']['mode'],'motion_guide')
  def test_numbering_budget_fingerprint_and_format(self):
   p=plan();before=copy.deepcopy(p);c=core.compile_shot(p,'b');self.assertEqual(c['continuity_reference']['label'],'<Picture 3>');self.assertIn("<Picture 3> is the preceding clip's final frame",c['prompt']);self.assertNotIn('<Video',c['prompt']);self.assertEqual(len(c['media']['image']),2);self.assertEqual(p,before)
   self.assertEqual(rt.current_shot(p,'b')[2],0)
@@ -34,7 +34,7 @@ class Tests(unittest.TestCase):
   p=plan();p['shots'][1]['prompt']='A close-up of the same woman.';p['prompt_options']={'no_subtitles':True};c=core.compile_shot(p,'b');self.assertIn('subject_definitions:',c['prompt']);self.assertEqual(c['continuity_reference']['label'],'<Picture 1>');self.assertTrue(c['prompt'].endswith('Screen: no subtitles, no on-screen text, no watermark.'));self.assertEqual(tail.augment_prompt(c['prompt'],'<Picture 1>'),c['prompt'])
  def test_import_defaults_and_explicit_f(self):
   p=plan();p['shots']=[]
-  result=story.recognize(p,json.dumps({'shots':[{'duration':1,'prompt':'garden'},{'duration':1,'prompt':'continue'},{'duration':1,'mode':'F','prompt':'reverse'}]}),'replace');self.assertTrue(result['valid'],result['errors']);self.assertEqual([s['continuity']['mode'] for s in result['candidate']['shots']],['independent','motion_redraw','tail_reference']);self.assertEqual(result['rows'][2]['media_counts']['image'],1);self.assertEqual(result['rows'][2]['continuity_reference']['label'],'<Picture 1>')
+  result=story.recognize(p,json.dumps({'shots':[{'duration':1,'prompt':'garden'},{'duration':1,'prompt':'continue'},{'duration':1,'mode':'F','prompt':'reverse'}]}),'replace');self.assertTrue(result['valid'],result['errors']);self.assertEqual([s['continuity']['mode'] for s in result['candidate']['shots']],['independent','motion_guide','tail_reference']);self.assertEqual(result['rows'][2]['media_counts']['image'],1);self.assertEqual(result['rows'][2]['continuity_reference']['label'],'<Picture 1>')
   result=story.recognize(p,'{"shots":[{"duration":1,"mode":"F","prompt":"reverse"}]}','replace');self.assertFalse(result['valid'])
  def test_reads_actual_final_frame_and_no_latent_fallback(self):
   import imageio_ffmpeg

@@ -57,22 +57,21 @@ async def validate_generation(plan,prepared,scope='all',shot_id=None):
         if mode in MODES and count<options(plan,shot)['context_frames']:raise ValueError(shot['id']+'：前段长度不足所选上下文帧数，请降低上下文或增加前段秒数')
     # Validate each distinct post-processing branch before spending GPU time.
     # Future predecessors may not exist yet; their planned lengths were checked above.
-    from .desk import internal_graph
+    from .desk import internal_graph,validate_execution_plan
     desks=[(nid,v) for nid,v in prompt.items() if v['class_type']=='Star7DirectorDesk']
     branches=set()
     for shot in selected:
         original=next(s for s in plan['shots'] if s['id']==shot['id']);post=original.get('post',{})
         branch=(bool(post.get('hd')),bool(post.get('face')),post.get('face_count'))
         if branch in branches:continue
-        branches.add(branch);expanded=copy.deepcopy(prompt)
+        branches.add(branch)
         for nid,spec in desks:
+            missing=[k for k in ('model','clip','video_vae','audio_vae') if k not in spec['inputs']]
+            if missing:raise ValueError('工作站缺少生成输入：'+', '.join(missing))
             ports={k:spec['inputs'][k] for k in ('model','clip','video_vae','audio_vae')}
             graph,result=internal_graph(plan,shot['id'],ports,nid+'.validation.')
-            expanded.pop(nid);expanded.update(graph)
-            for target in expanded.values():
-                for k,v in target.get('inputs',{}).items():
-                    if v==[nid,0]:target['inputs'][k]=result
-        valid=await execution.validate_prompt(str(uuid.uuid4()),expanded,None)
+            validate_execution_plan(graph)
+        valid=await execution.validate_prompt(str(uuid.uuid4()),copy.deepcopy(prompt),None)
         if not valid[0]:raise ValueError(shot['id']+'：节点或模型配置不通过 '+json.dumps(valid[1],ensure_ascii=False))
     warnings=inactive_references(plan,selected)
     message=str(len(selected))+' 个镜头通过生成预检：衔接帧范围、节点与模型配置正常。'
