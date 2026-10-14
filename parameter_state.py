@@ -122,7 +122,7 @@ def editable_inputs(value):
             'references':sorted(shot.get('references') or []),'assets':assets,
             'post':{'hd':bool(post.get('hd')),'face':bool(post.get('face')),
                     'face_count':post.get('face_count',value.get('generation',{}).get('395',{}).get('face_count',1)) if post.get('face') else None},
-            'prompt_options':{k:bool(shot.get('prompt_options',{}).get(k)) for k in ('no_subtitles','no_background_music')}}
+            'prompt_options':{**{k:bool(shot.get('prompt_options',{}).get(k)) for k in ('no_subtitles','no_background_music')},'custom_prompt':shot.get('prompt_options',{}).get('custom_prompt','').strip()}}
 
 def visible_changes(old,new,names=None):
     """One readable row per editable choice, never a recursive payload dump."""
@@ -174,6 +174,8 @@ def visible_changes(old,new,names=None):
     for key,label in (('no_subtitles','强调无字幕'),('no_background_music','强调无背景音乐')):
         if before['prompt_options'][key]!=after['prompt_options'][key]:
             add('shot.prompt_options.'+key,label,'开启' if before['prompt_options'][key] else '关闭','开启' if after['prompt_options'][key] else '关闭')
+    if before['prompt_options']['custom_prompt']!=after['prompt_options']['custom_prompt']:
+        add('shot.prompt_options.custom_prompt','自定义参数',before['prompt_options']['custom_prompt'] or '未设置',after['prompt_options']['custom_prompt'] or '未设置')
     return rows
 
 def details(plan,sid,record):

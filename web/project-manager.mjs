@@ -3,13 +3,14 @@ export function mountProjectManager({getPlan,isBusy,onTitle,request,root}){
  const status=text=>$('project-save-status').textContent=text;
  async function refresh(){try{const data=await request('list');$('local-project-count').textContent=data.projects.length;$('local-project-list').replaceChildren(...data.projects.map(item=>{
   const row=document.createElement('div');row.className='local-project-row';const info=document.createElement('div'),name=document.createElement('b'),date=document.createElement('small');name.textContent=item.title+(item.id===getPlan().id?' · 当前项目':'');date.textContent=new Date(item.modified_at).toLocaleString()+' · '+item.shots+' 个镜头';info.append(name,date);row.append(info);
-  for(const [label,action] of [['读取','read'],['重命名','rename'],['创建副本','clone'],['删除','delete']]){const button=document.createElement('button');button.type='button';button.textContent=label;button.disabled=action==='read'&&isBusy()||action==='delete'&&item.id===getPlan().id;button.onclick=async()=>{try{
+  for(const [label,action] of [['读取','read'],['重命名','rename'],['创建副本','clone'],['导出项目包','export'],['删除','delete']]){const button=document.createElement('button');button.type='button';button.textContent=label;button.disabled=['read','export'].includes(action)&&isBusy()||action==='delete'&&item.id===getPlan().id;button.onclick=async()=>{try{
+   if(action==='export'){if(isBusy()){status('生成或排队完成后再导出项目包。');return}button.disabled=true;if(item.id===getPlan().id)await flush(true);status('正在导出项目包…');const result=await request('export',{id:item.id});status(result.message);return}
    if(action==='read'){await change(()=>request('read',{id:item.id}));return}
    if(action==='rename'){const title=await textName(item.title);if(title===null)return;if(item.id===getPlan().id){onTitle(title);changed();await flush(true)}else await request('rename',{id:item.id,title});}
    if(action==='clone'){const source=await request('read',{id:item.id});await request('clone',{plan:source.plan,workflow:source.workflow});}
    if(action==='delete'){if(!await confirmDelete(item.title))return;await request('delete',{id:item.id});}
    await refresh();
-  }catch(e){status(e.message)}};row.append(button)}return row}));}catch(e){status(e.message)}}
+  }catch(e){status(e.message)}finally{if(action==='export')button.disabled=isBusy()}};row.append(button)}return row}));}catch(e){status(e.message)}}
  function opened(){session++;openedId=getPlan().id;revision=1;saved=0;clearTimeout(timer);inflight=null;$('project-current-name').value=getPlan().title||'';status('正在自动保存…');flush(false).catch(()=>{});}
  function changed(){if(document.body.dataset.mode==='library')return;revision++;status('有改动，正在自动保存…');clearTimeout(timer);timer=setTimeout(()=>flush(false).catch(()=>{}),500)}
  async function flush(manual=false){if(document.body.dataset.mode==='library')return;clearTimeout(timer);if(inflight){await inflight;if(manual||saved<revision)return flush(manual);return}const localSession=session,version=revision;
@@ -29,6 +30,7 @@ export function mountProjectManager({getPlan,isBusy,onTitle,request,root}){
  $('project-save').onclick=()=>flush(true).catch(()=>{});
  $('project-save-as').onclick=()=>change(()=>request('clone',{plan:structuredClone(getPlan())}));
  $('project-new').onclick=()=>change(()=>request('new',{plan:structuredClone(getPlan())}));
+ $('project-package-import').onclick=()=>{if(isBusy()){status('生成或排队完成后再导入项目包。');return}$('package-import').click()};
  $('project-refresh').onclick=refresh;
  return {opened,changed,refresh};
 }

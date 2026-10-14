@@ -64,6 +64,8 @@ def generation_identity(plan):
     def text(value):
         # Only explicit @ references resolve names. Prose/dialogue stays literal.
         return MENTION.sub(lambda match:'@{'+lookup[mention_name(match)]+'}' if mention_name(match) in lookup else match[0],str(value or ''))
+    if result.get('prompt_options',{}).get('custom_prompt'):
+        result['prompt_options']['custom_prompt']=text(result['prompt_options']['custom_prompt'])
     for shot in result['shots']:
         shot.pop('name',None);shot['prompt']=text(shot['prompt'])
         if 'references' in shot:shot['references']=[lookup.get(ref,ref) for ref in shot['references']]

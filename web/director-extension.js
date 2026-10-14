@@ -33,7 +33,7 @@ function mount(owner,libraryMode=false,dialog=null){
  const downloadVideo=(url,name)=>{const a=document.createElement('a');a.href=url+(url.includes('?')?'&':'?')+new URLSearchParams({name});a.download=name;a.click()};
  const graph=owner.graph,isDesk=owner.comfyClass==='Star7DirectorDesk';let disposed=false,reloadVersion=0,dom=null;
  const attached=()=>!disposed&&owner.graph===graph&&graph.getNodeById(owner.id)===owner;
- const frame=document.createElement('iframe');frame.src=new URL('./index.html?v=20261015-native3&mode='+(libraryMode?'library':isDesk?'desk':'legacy'),import.meta.url).href;frame.style.cssText='display:block;width:100%;height:100%;border:0;min-width:0;border-radius:10px;background:#111317';
+ const frame=document.createElement('iframe');frame.src=new URL('./index.html?v=20261015-type2&mode='+(libraryMode?'library':isDesk?'desk':'legacy'),import.meta.url).href;frame.style.cssText='display:block;width:100%;height:100%;border:0;min-width:0;border-radius:10px;background:#111317';
  const host=document.createElement('div');host.style.cssText='width:100%;height:100%;min-width:0;overflow:hidden;pointer-events:auto;';host.append(frame);
  const widget=hideJSON(owner,libraryMode?'library_json':'project_json');let running=false,stop=false,livePlan=null,activeRun=null,executingOwner=false,exporting=false,serverOwned=false,batchRunId=null;const revisions=new Map();const seenSeeds=new Map(),progressSignatures=new Map();let projectSaveChain=Promise.resolve();
  const send=(type,extra)=>{if(attached())frame.contentWindow?.postMessage(messageData({type,...extra}),location.origin)};
@@ -73,6 +73,16 @@ function mount(owner,libraryMode=false,dialog=null){
    const work=async()=>{if(!attached())return;try{
     if(['new','read','activate'].includes(data.action)&&running)throw Error('生成或排队完成后再切换项目。');
     if(data.action==='list'){const result=await (await api.fetchApi('/star7/director/local-projects')).json();send('star7-director-project-reply',{requestId:data.requestId,result});return}
+    if(data.action==='export'){
+     if(running)throw Error('生成或排队完成后再导出项目包。');
+     const item=await jsonRequest('/star7/director/local-projects/read',{id:data.body.id});
+     if(!item.workflow?.nodes?.length)throw Error('此项目缺少保存的工作流，请读取后保存一次再导出。');
+     const response=await api.fetchApi('/star7/director/package/export',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({plan:item.plan,workflow:item.workflow})});
+     if(!response.ok)throw Error((await response.json()).error);
+     if(!attached())return;
+     const url=URL.createObjectURL(await response.blob()),link=document.createElement('a');link.href=url;link.download=(item.plan.title||item.plan.id)+'.star7.zip';link.click();setTimeout(()=>URL.revokeObjectURL(url),1000);
+     send('star7-director-project-reply',{requestId:data.requestId,result:{message:'项目包已导出，包含工作流、设置和素材。'}});return;
+    }
     if(data.action==='activate'){
      send('star7-director-project-reply',{requestId:data.requestId,result:{ok:true}});
      if(data.item.workflow?.nodes?.length)await loadProjectWorkflow(data.item);

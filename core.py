@@ -53,6 +53,8 @@ def validate(plan):
     if not isinstance(execution_options,dict) or ('clear_vram_between_shots' in execution_options and type(execution_options['clear_vram_between_shots']) is not bool):raise ValueError('段间清理显存必须为开关值')
     options=plan.get('prompt_options',{})
     if not isinstance(options,dict) or ('no_subtitles' in options and type(options['no_subtitles']) is not bool):raise ValueError('全局无字幕选项必须是布尔值')
+    if not isinstance(options.get('custom_prompt',''),str) or len(options.get('custom_prompt',''))>12000:raise ValueError('自定义参数必须为文字，最多 12000 字符')
+    if 'custom_prompt_enabled' in options and type(options['custom_prompt_enabled']) is not bool:raise ValueError('启用自定义参数必须为开关值')
     names, asset_ids, shot_ids = {}, set(), set()
     for asset in assets:
         if not isinstance(asset,dict): raise ValueError('素材卡必须是对象')
@@ -127,6 +129,10 @@ def _compile_shot(plan, shot_id, parameter_payload=False):
     if shot is None: raise ValueError("Unknown shot")
     import copy
     shot=copy.deepcopy(shot)
+    original_prompt=shot['prompt']
+    prompt_options=plan.get('prompt_options',{})
+    custom_prompt=prompt_options.get('custom_prompt','').strip() if prompt_options.get('custom_prompt_enabled',bool(prompt_options.get('custom_prompt','').strip())) else ''
+    if custom_prompt:shot['prompt']=original_prompt.rstrip()+'\n\n'+custom_prompt
     smart=shot.get('input_mode','reference')=='keyframes'
     keyframes=shot.get('keyframes',{}) if smart else {}
     if smart:shot['continuity']={'mode':'independent'}
@@ -224,9 +230,12 @@ def _compile_shot(plan, shot_id, parameter_payload=False):
     if plan.get('prompt_options',{}).get('no_background_music',False):
         prompt=re.sub(r'(?mis)^\s*non_diegetic_music\s*:.*?(?=^\s*[a-z_]+\s*:|\Z)', '', prompt).rstrip()+'\nnon_diegetic_music:\nN/A'
     fingerprint_shot={k:v for k,v in shot.items() if k not in ('seed_control','next_seed')}
+    fingerprint_shot['prompt']=original_prompt
     # Hash the effective flag, preserving old per-shot fingerprints while
     # global settings take precedence over legacy values.
     options=dict(shot.get('prompt_options',{}))
+    if custom_prompt:options['custom_prompt']=custom_prompt
+    else:options.pop('custom_prompt',None)
     if no_subtitles:options['no_subtitles']=True
     else:options.pop('no_subtitles',None)
     if options:fingerprint_shot['prompt_options']=options

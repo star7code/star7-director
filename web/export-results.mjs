@@ -1,4 +1,4 @@
-import {chooseDirectory,saveExport} from './export-save.mjs?v=20261015-native3';
+import {chooseDirectory,saveExport} from './export-save.mjs?v=20261015-type2';
 export function mountExportResults(){
  const $=id=>document.getElementById(id);let result=null,items=[],selected=0,pending=null;
  const send=data=>parent.postMessage(data,location.origin);

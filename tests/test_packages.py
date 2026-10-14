@@ -14,12 +14,15 @@ class Tests(unittest.TestCase):
  def test_roundtrip_excludes_cache_and_preserves_original(self):
   with tempfile.TemporaryDirectory(dir=ROOT) as tmp:
    folder=Path(tmp);image,plan,workflow=self.fixture(folder);original=image.read_bytes()
+   plan['prompt_options']={'custom_prompt':'Soft lighting.','custom_prompt_enabled':False}
    with patch.object(runtime,'resolve_media',return_value=image),patch.object(packs,'MEDIA',folder/'imported'):
     archive=packs.export_package(plan,workflow,folder)
     try:
      with zipfile.ZipFile(archive) as z:self.assertEqual(len(z.namelist()),3);self.assertFalse(any('cache' in n or '.safetensors' in n for n in z.namelist()))
      result=packs.import_package(archive)
      self.assertNotEqual(result['plan']['id'],plan['id']);self.assertEqual(result['plan']['assets'][0]['id'],'actor')
+     self.assertEqual(result['plan']['prompt_options'],plan['prompt_options'])
+     self.assertEqual(json.loads(result['workflow']['nodes'][0]['widgets_values'][0])['prompt_options'],plan['prompt_options'])
      imported=list((folder/'imported').glob('*.png'))[0];self.assertEqual(imported.read_bytes(),original)
      self.assertEqual(image.read_bytes(),original)
      self.assertEqual(json.loads(result['workflow']['nodes'][1]['widgets_values'][0])['assets'],result['plan']['assets'])

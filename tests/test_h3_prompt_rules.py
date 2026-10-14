@@ -4,6 +4,22 @@ ROOT=Path(__file__).resolve().parents[1];sys.path.insert(0,str(ROOT));pkg=types.
 core=importlib.import_module(pkg.__name__+'.core');story=importlib.import_module(pkg.__name__+'.storyboard')
 def plan(prompt):return {'schema_version':'1.0','id':'p','assets':[{'id':'actor','kind':'character','name':'小可','media':[{'type':'image','source':'a.png'}]},{'id':'deer','kind':'character','name':'小鹿','media':[{'type':'image','source':'b.png'}]}],'shots':[{'id':'s','duration':5,'prompt':prompt}]}
 class Tests(unittest.TestCase):
+ def test_custom_prompt_toggle_retains_text_but_ignores_disabled_references(self):
+  import json
+  p=plan('A classroom.');plain=core.compile_shot(p,'s')['fingerprint']
+  p['prompt_options']={'custom_prompt_enabled':True,'custom_prompt':'Soft light.'}
+  enabled=core.compile_shot(p,'s');self.assertIn('Soft light.',enabled['prompt'])
+  p['prompt_options']['custom_prompt_enabled']=False
+  saved=json.loads(json.dumps(p));self.assertEqual(saved['prompt_options']['custom_prompt'],'Soft light.');self.assertFalse(saved['prompt_options']['custom_prompt_enabled']);self.assertEqual(core.compile_shot(saved,'s')['fingerprint'],plain)
+  p['prompt_options']['custom_prompt']='Use @{missing}.';self.assertEqual(core.compile_shot(p,'s')['fingerprint'],plain)
+  p['prompt_options'].update(custom_prompt_enabled=True,custom_prompt='Soft light.');self.assertEqual(core.compile_shot(p,'s')['fingerprint'],enabled['fingerprint'])
+ def test_custom_prompt_refs_fingerprint_revert_and_readable_changes(self):
+  p=plan('A classroom.');before=copy.deepcopy(p);old=core.compile_shot(p,'s')['fingerprint']
+  parameter=importlib.import_module(pkg.__name__+'.parameter_state');baseline=parameter.snapshot(p,'s')
+  p['prompt_options']={'custom_prompt':'Soft light.\nUse @{小可}.'}
+  result=core.compile_shot(p,'s');self.assertIn('Soft light.',result['prompt']);self.assertNotIn('@{小可}',result['prompt']);self.assertNotEqual(result['fingerprint'],old);self.assertEqual(p['shots'],before['shots'])
+  changes=parameter.visible_changes(baseline,parameter.snapshot(p,'s'));self.assertTrue(any(c['field']=='shot.prompt_options.custom_prompt' for c in changes));self.assertFalse(any(c['field']=='shot.prompt' for c in changes))
+  p['prompt_options']['custom_prompt']='';self.assertEqual(core.compile_shot(p,'s')['fingerprint'],old);self.assertEqual(parameter.visible_changes(baseline,parameter.snapshot(p,'s')),[])
  def test_global_no_subtitles_all_shots_and_legacy_precedence(self):
   p=plan('garden');p['assets']=[];p['shots'].append({'id':'s2','duration':3,'prompt':'continue','continuity':{'mode':'motion_guide','source_shot':'s'}});before=copy.deepcopy(p)
   p['prompt_options']={'no_subtitles':True};self.assertTrue(all(s['prompt'].endswith('Screen: no subtitles, no on-screen text, no watermark.') for s in core.compile_plan(p)));self.assertEqual(p['shots'],before['shots'])

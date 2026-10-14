@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.2.2 — 2026-10-15
+
+- Add project-package import at the top of project management and export for each saved project, preserving that project's own workflow and materials.
+- Add global custom prompt text with an enable checkbox; disabling retains text, omits it from generation and does not treat inactive text edits as shot changes.
+- Preserve custom prompt text and its switch through project/workflow/package saves and imports; include enabled content in prompt previews and explicit parameter-change details.
+- Unify typography: minimum text 15px, controls 15px, body 16px and section headings 18px; improve secondary-text contrast and control spacing.
+- Keep the author's example workflow unchanged and exclude local projects, materials, caches, models and generated media.
+
 ## 0.2.1 — 2026-10-15
 
 - Fix film assembly when clips have different audio rates, channel counts or missing audio; preserve compatible video without re-generation.

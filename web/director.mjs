@@ -1,7 +1,7 @@
-import {chooseDirectory,saveResponse,saveNative} from './export-save.mjs?v=20261015-native3';
-import {mountExportResults} from './export-results.mjs?v=20261015-native3';
+import {chooseDirectory,saveResponse,saveNative} from './export-save.mjs?v=20261015-type2';
+import {mountExportResults} from './export-results.mjs?v=20261015-type2';
 import {mountQueueView} from './queue-view.mjs?v=20261014-audit1';
-import {mountProjectManager} from './project-manager.mjs?v=20261014-audit2';
+import {mountProjectManager} from './project-manager.mjs?v=20261015-type2';
 import {mountPlaylistPreview} from './playlist-preview.mjs?v=20261013-monotone-post1';
 import {changeContinuity} from './continuity-state.mjs?v=20261013-monotone-post1';
 import {nextMaterialName,retireNameAlias,initializeMaterialSlots} from './asset-naming.mjs?v=20261013-monotone-post1';
@@ -82,7 +82,7 @@ function drawShots(){
 }
 $('shots').ondragover=e=>{if(draggedShot&&!importing){e.preventDefault();e.dataTransfer.dropEffect='move'}};
 $('shots').ondrop=e=>{if(!draggedShot||importing)return;e.preventDefault();const id=draggedShot;clearShotDrag();moveShot(id,null)};
-function render(){$('clear-vram-between-shots').checked=!!plan.execution_options?.clear_vram_between_shots;for(const id of ['project-library-import','project-library-export'])$(id).disabled=busy||importing;renderInputMode();migratePromptOptions();$('global-no-music').checked=!!plan.prompt_options.no_background_music;$('global-no-subtitles').checked=plan.prompt_options.no_subtitles;$('import-storyboard').disabled=importing;renderContinuitySettings();layoutUI?.apply();document.body.dataset.busy=String(busy);closeShotMenu();ensureAssetSequences();
+function render(){$('clear-vram-between-shots').checked=!!plan.execution_options?.clear_vram_between_shots;for(const id of ['project-library-import','project-library-export'])$(id).disabled=busy||importing;renderInputMode();migratePromptOptions();$('global-no-music').checked=!!plan.prompt_options.no_background_music;$('global-no-subtitles').checked=plan.prompt_options.no_subtitles;$('global-custom-prompt-enabled').checked=plan.prompt_options.custom_prompt_enabled??!!plan.prompt_options.custom_prompt?.trim();if(document.activeElement!==$('global-custom-prompt'))$('global-custom-prompt').value=plan.prompt_options.custom_prompt||'';$('import-storyboard').disabled=importing;renderContinuitySettings();layoutUI?.apply();document.body.dataset.busy=String(busy);closeShotMenu();ensureAssetSequences();
  renderCanvas();$('preset').value=plan.generation_preset||'standard';$('title').value=plan.title||'新建影片';
  refreshProcessAvailability();
  $('library-name').value=plan.library_name||'素材库';$('undo-asset').hidden=!undoAssetEdit;$('undo-asset').disabled=busy||importing;$('asset-count').textContent=plan.assets.length;$('shot-count').textContent=plan.shots.length;
@@ -509,12 +509,15 @@ $('inspect-prompt').onclick=async()=>{
 };
 
 function migratePromptOptions(){if(!Object.hasOwn(plan.prompt_options||{},'no_subtitles'))plan.prompt_options={...plan.prompt_options,no_subtitles:plan.shots.some(s=>s.prompt_options?.no_subtitles===true)};for(const shot of plan.shots)if(shot.prompt_options){delete shot.prompt_options.no_subtitles;if(!Object.keys(shot.prompt_options).length)delete shot.prompt_options}}
+$('global-custom-prompt-enabled').onchange=()=>{plan.prompt_options={...plan.prompt_options,custom_prompt_enabled:$('global-custom-prompt-enabled').checked};draft();refreshProcessAvailability()};
+$('global-custom-prompt').oninput=()=>{plan.prompt_options={...plan.prompt_options,custom_prompt_enabled:$('global-custom-prompt-enabled').checked,custom_prompt:$('global-custom-prompt').value};draft()};
+$('global-custom-prompt').onchange=()=>refreshProcessAvailability();
 $('global-no-subtitles').onchange=()=>{plan.prompt_options={...plan.prompt_options,no_subtitles:$('global-no-subtitles').checked};draft();refreshProcessAvailability()};
 
 function canDeleteShot(id){return !!id&&!importing&&!runSubmitting&&!queuedShots.has(id)}
 function canKeepQueuedShots(shots){return [...queuedShots].every(id=>shots.some(s=>s.id===id))}
 function visibleChanges(state,shot){
- const allowed=new Set(['shot.duration','shot.seed','shot.prompt','shot.input_mode','shot.continuity','shot.continuity.mode','shot.continuity.source_shot','shot.continuity.frame','shot.keyframes.first','shot.keyframes.last','shot.keyframes.first.from_previous.source_version','shot.references','shot.post.hd','shot.post.face','shot.post.face_count','shot.prompt_options.no_subtitles','shot.prompt_options.no_background_music']);
+ const allowed=new Set(['shot.duration','shot.seed','shot.prompt','shot.input_mode','shot.continuity','shot.continuity.mode','shot.continuity.source_shot','shot.continuity.frame','shot.keyframes.first','shot.keyframes.last','shot.keyframes.first.from_previous.source_version','shot.references','shot.post.hd','shot.post.face','shot.post.face_count','shot.prompt_options.no_subtitles','shot.prompt_options.no_background_music','shot.prompt_options.custom_prompt']);
  let changes=(state?.changes||[]).filter(c=>allowed.has(c.field)||/^assets\.[^.]+\.(media|voice_id|description)$/.test(c.field||''));
  const modes={reference:'参考模式',keyframes:'智能首尾帧模式','未设置':'参考模式'};
  changes=changes.map(c=>c.field==='shot.input_mode'?{...c,label:'输入模式',before:modes[c.before]||c.before,after:modes[c.after]||c.after}:c);
