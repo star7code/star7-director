@@ -237,7 +237,7 @@ async def execute(run):
                 run['results'][sid]={'path':record['path'],'post':record.get('post'),'frames':record['frame_count']}
                 run['retained']+=1;update(run,position=index+1,message='保留已有成品：'+sid)
             else:
-                row,_=Star7DirectorBaseCache().find(run['plan'],sid,run['prepared']['output'])
+                row,_=(Star7DirectorBaseCache().find_for_process if run['scope']=='process' else Star7DirectorBaseCache().find)(run['plan'],sid,run['prepared']['output'])
                 post=shot.get('post',{});action='process' if run['scope']=='process' or run['scope']=='all' and row and (post.get('hd') or post.get('face')) else 'one' if run['scope'] in ('one','selected') else 'all'
                 sampled=action!='process'
                 run.setdefault('queue_stages',{})[sid]=([] if not sampled else ['base'])+(['hd'] if post.get('hd') else [])+(['face'] if post.get('face') else [])
@@ -252,7 +252,7 @@ async def execute(run):
                     run['intermediate_nonce']=base_nonce
                     shot['next_seed']=next_seed(shot);run['seed_updates'][sid]={'shotId':sid,'seed':shot.get('seed',0),'nextSeed':shot['next_seed'],'seedControl':shot.get('seed_control','fixed')}
                     update(run,phase='decode',message='一采视频已保存，准备二采／人脸修复：'+sid)
-                    row,_=Star7DirectorBaseCache().find(run['plan'],sid,run['prepared']['output'])
+                    row,_=(Star7DirectorBaseCache().find_for_process if run['scope']=='process' else Star7DirectorBaseCache().find)(run['plan'],sid,run['prepared']['output'])
                     if not row:raise ValueError('新一采视频已保留，但新一采缓存不可用；后处理未启动')
                     action='process'
                 if action=='process' and not row:
@@ -299,7 +299,7 @@ async def start(body):
     if not existing:await validate_generation(plan,prepared,scope,shot_ids if scope=='selected' else body.get('shot_id'))
     pins={}
     for sid in shot_ids:
-        row,_=Star7DirectorBaseCache().find(plan,sid,prepared['output'])
+        row,_=(Star7DirectorBaseCache().find_for_process if scope=='process' else Star7DirectorBaseCache().find)(plan,sid,prepared['output'])
         if row:pins[sid]=row
         if scope=='process' and not row and not existing:raise ValueError('没有可用一采缓存，请重新生成当前镜头')
         if scope=='process' and not any(next(s for s in plan['shots'] if s['id']==sid).get('post',{}).get(k) for k in ('hd','face')):raise ValueError('请勾选二采或人脸修复')

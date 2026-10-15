@@ -10,7 +10,7 @@ class Tests(unittest.TestCase):
  def test_mode_priority_audio_binding_and_missing_frame_are_nonblocking(self):
   p=self.plan();p['prompt_options']={'no_subtitles':True,'no_background_music':True};c=core.compile_shot(p,'a')
   self.assertEqual(c['media']['image'],[]);self.assertEqual(len(c['media']['audio']),1)
-  self.assertIn('voice timbre for <Subject 1>',c['prompt']);self.assertIn('<Audio 1>',c['prompt']);self.assertIn('@{actor}',c['prompt'])
+  self.assertIn('@{actor} <Audio 1>',c['prompt']);self.assertNotIn('voice timbre for',c['prompt']);self.assertIn('<Audio 1>',c['prompt']);self.assertIn('@{actor}',c['prompt'])
   self.assertIn('the supplied first frame',c['prompt']);self.assertIn('@{尾帧}',c['prompt']);self.assertIn('@{尾帧参考}',c['prompt']);self.assertNotIn('<Picture',c['prompt'])
   self.assertTrue(c['prompt'].endswith('non_diegetic_music:\nN/A'));self.assertIn('Screen: no subtitles',c['prompt']);self.assertNotIn('Piano',c['prompt'])
   p['shots'][0]['keyframes']['last']={'source':'last.png'};c=core.compile_shot(p,'a');self.assertIn('the supplied last frame',c['prompt']);self.assertIn('@{尾帧参考}',c['prompt'])

@@ -37,8 +37,15 @@ def validate_continuity_settings(cfg):
     if not isinstance(cfg,dict):raise ValueError('连续性设置必须是对象')
     if 'context_frames' in cfg and (type(cfg['context_frames']) is not int or cfg['context_frames'] not in (5,22,39,56)):raise ValueError('上下文帧数只支持5、22、39、56')
     if 'audio' in cfg and type(cfg['audio']) is not bool:raise ValueError('音频延续开关必须是布尔值')
+    if 'drift_control' in cfg and type(cfg['drift_control']) is not bool:raise ValueError('运动引导去漂移必须为开关值')
+    strength=cfg.get('drift_strength',.3)
+    if isinstance(strength,bool) or not isinstance(strength,(int,float)) or not math.isfinite(strength) or not 0<=strength<=.6:raise ValueError('去漂移强度必须为0–0.6')
     v=cfg.get('redraw',.65)
     if isinstance(v,bool) or not isinstance(v,(int,float)) or not math.isfinite(v) or not .4<=v<=.95:raise ValueError('重绘幅度必须为0.40–0.95')
+
+def injects_image_description(asset, smart=False):
+    return not smart and bool(asset.get('inject_description',False)) and bool(asset.get('description','').strip()) and asset.get('kind') in ('character','prop','scene') and any(m.get('type')=='image' for m in asset.get('media',[]))
+
 
 def validate(plan):
     if not isinstance(plan, dict) or plan.get("schema_version") != "1.0":
@@ -60,6 +67,8 @@ def validate(plan):
         if not isinstance(asset,dict): raise ValueError('素材卡必须是对象')
         if not isinstance(asset.get('aliases',[]),list) or not isinstance(asset.get('media',[]),list): raise ValueError('别名与媒体必须是列表')
         if not isinstance(asset.get('name'),str): raise ValueError('素材名称必须是文字')
+        if not isinstance(asset.get('description',''),str):raise ValueError('素材描述必须是文字')
+        if 'inject_description' in asset and type(asset['inject_description']) is not bool:raise ValueError('注入素材描述必须是开关值')
         aid = identifier(asset.get("id"))
         if aid in asset_ids: raise ValueError("Duplicate asset ID: " + aid)
         asset_ids.add(aid)
@@ -154,7 +163,7 @@ def _compile_shot(plan, shot_id, parameter_payload=False):
         if aid in visiting:raise ValueError('文字素材引用形成循环：'+by_id[aid]['name'])
         if aid in expanded:return aid
         visiting.add(aid)
-        if not by_id[aid].get('media'):
+        if not by_id[aid].get('media') or injects_image_description(by_id[aid],smart):
             for match in MENTION.finditer(by_id[aid].get('description','')):expand(mention_name(match))
         voice=by_id[aid].get('voice_id')
         if voice:expand(voice)
@@ -182,6 +191,26 @@ def _compile_shot(plan, shot_id, parameter_payload=False):
         index=len(media['image']);label=f'<Picture {index+1}>'
         continuity_reference={'index':index,'label':label,'source_shot':shot['continuity']['source_shot'],'role':'previous_final_frame','token':'@{尾帧}'}
     if reference_mode=='selected_frame':continuity_reference.update(role='previous_selected_frame',frame=shot['continuity']['frame'],token='@{参考帧}')
+    # Explicit references include nested text/opted-in descriptions, but not
+    # the automatic voice_id dependency. This distinguishes authored bindings
+    # from the missing-reference safety net.
+    explicit=set()
+    def mark_explicit(name):
+        aid=names.get(name)
+        if aid is None or aid in explicit:return
+        explicit.add(aid)
+        card=by_id[aid]
+        if not card.get('media') or injects_image_description(card,smart):
+            for match in MENTION.finditer(card.get('description','')):mark_explicit(mention_name(match))
+    for match in MENTION.finditer(shot['prompt']):mark_explicit(mention_name(match))
+    explicit_audio={label for aid in explicit for label in labels.get(aid,[]) if label.startswith('<Audio ')}
+    fallback_audio={}
+    for aid in requested:
+        voice=by_id[aid].get('voice_id')
+        if not voice:continue
+        tags=[tag for tag in labels.get(voice,[]) if tag.startswith('<Audio ')]
+        if tags and not all(tag in explicit_audio or tag in shot['prompt'] for tag in tags):
+            fallback_audio[aid]=' '.join(tags)
     def text_for(aid):
         if aid==TAIL_REFERENCE_ID:
             if smart:return 'the supplied last frame' if keyframes.get('last') else '@{尾帧}'
@@ -189,8 +218,13 @@ def _compile_shot(plan, shot_id, parameter_payload=False):
         if aid==SELECTED_REFERENCE_ID:return continuity_reference['label'] if reference_mode=='selected_frame' else '@{参考帧}'
         if aid=='__star7_first_frame__':return 'the supplied first frame' if smart and keyframes.get('first') else '@{首帧}'
         if aid=='__star7_last_frame__':return 'the supplied last frame' if smart and keyframes.get('last') else '@{尾帧}'
-        if smart and any(m['type'] in ('image','video') for m in by_id[aid].get('media',[])):return '@{'+aid+'}'
-        return ' '.join(labels[aid]) or MENTION.sub(replace,by_id[aid].get('description') or by_id[aid]['name'])
+        label='@{'+aid+'}' if smart and any(m['type'] in ('image','video') for m in by_id[aid].get('media',[])) else ' '.join(labels[aid])
+        if label:
+            if aid in fallback_audio:label+=' '+fallback_audio[aid]
+            description=by_id[aid].get('description','').strip()
+            return label+' '+MENTION.sub(replace,description) if description and injects_image_description(by_id[aid],smart) else label
+        text=MENTION.sub(replace,by_id[aid].get('description') or by_id[aid]['name'])
+        return text+' '+fallback_audio[aid] if aid in fallback_audio else text
     def replace(match):
         aid=select(mention_name(match))
         if aid==TAIL_REFERENCE_ID and smart and match[1]!='尾帧':return match[0]
@@ -200,26 +234,14 @@ def _compile_shot(plan, shot_id, parameter_payload=False):
         if aid=='__star7_last_frame__' and not (smart and keyframes.get('last')):return match[0]
         return text_for(aid)
     prompt=MENTION.sub(replace,shot['prompt'])
-    voices=[];formal_voices=[]
+    # Text-only voice cards remain textual timbre guidance. Audio bindings
+    # are authored explicitly or inserted inline above, never inferred S IDs.
+    voices=[]
     for aid in requested:
         voice=by_id[aid].get('voice_id')
-        if voice:
+        if voice and voice not in explicit and not labels.get(voice):
             voices.append(by_id[aid]['name']+'音色：'+text_for(voice))
-            definition=re.search(r'(?mis)^\s*subject_definitions\s*:(.*?)(?=^\s*summary\s*:)',prompt)
-            source_labels=labels[voice]
-            if definition and source_labels and all(tag in definition[1] for tag in source_labels):continue
-            subject=None
-            if definition:
-                for match in re.finditer(r'(<Subject\s+\d+>)(.*?)(?=<Subject\s+\d+>|$)',definition[1],re.S):
-                    if by_id[aid]['name'] in match[2] or aid in match[2] or any(tag in match[2] for tag in labels[aid]):subject=match[1];break
-            if source_labels:formal_voices.append(' '.join(source_labels)+': reference - voice timbre for '+(subject or by_id[aid]['name'])+'.')
-            else:formal_voices.append(by_id[aid]['name']+' voice: '+text_for(voice)+'.')
-    if voices:
-        binding='；'.join(voices)
-        section=re.search(r'(?mi)^\s*summary\s*:',prompt) if re.search(r'(?mi)^\s*subject_definitions\s*:',prompt) else None
-        if section:
-            if formal_voices:prompt=prompt[:section.start()].rstrip()+'\n'+'\n'.join(formal_voices)+'\n\n'+prompt[section.start():]
-        else:prompt+='\n'+binding
+    if voices:prompt+='\n'+'；'.join(voices)
     if continuity_reference:
         from .tail_reference import augment_prompt
         prompt=augment_prompt(prompt,continuity_reference['label'],frame=continuity_reference.get('frame'))
@@ -245,6 +267,9 @@ def _compile_shot(plan, shot_id, parameter_payload=False):
         fingerprint_shot.pop('input_mode',None)
     if plan.get('prompt_options',{}).get('no_background_music',False):fingerprint_shot.setdefault('prompt_options',{})['no_background_music']=True
     payload={"shot":fingerprint_shot,"settings":plan.get("settings",{}),"assets":[by_id[a] for a in requested]}
+    if fallback_audio:payload['voice_inline_recipe']=1
+    # An absent/disabled switch has the same behavior as legacy assets.
+    payload['assets']=[{k:v for k,v in card.items() if k!='inject_description' or injects_image_description(card,smart)} for card in payload['assets']]
     if smart and keyframes.get('first',{}).get('from_previous'):
         payload['first_from_previous']=dependency_source(plan,shot_id)
     aliases=plan.get('media_aliases',{})
@@ -259,6 +284,8 @@ def _compile_shot(plan, shot_id, parameter_payload=False):
         sizes=reference_limits(plan.get('reference_size'));payload['reference_size']={'mode':sizes['mode'],**{k:v for k,v in sizes.items() if ((media['image'] or continuity_reference or keyframes) and k.startswith('image_') or media['video'] and k.startswith('video_')) and (k.endswith('_mp') if sizes['mode']=='megapixels' else k.endswith('_long_edge'))}}
     if shot.get('continuity',{}).get('mode','independent') in ('previous_latent','motion_guide','motion_redraw'):
         cfg={**plan.get('continuity_settings',{}),**shot['continuity']};payload['av_handoff']={'version':2,'context_frames':cfg.get('context_frames',22),'audio':cfg.get('audio',True),'redraw':cfg.get('redraw',.65) if cfg['mode']=='motion_redraw' else None}
+        if cfg['mode']!='motion_redraw' and cfg.get('drift_control',False) and cfg.get('drift_strength',.3)>0:
+            payload['av_handoff']['drift_control']={'recipe':1,'strength':cfg.get('drift_strength',.3)}
     if parameter_payload:return payload
     fingerprint=hashlib.sha256(json.dumps(payload,ensure_ascii=False,sort_keys=True,allow_nan=False).encode()).hexdigest()
     return {"id":shot_id,"prompt":prompt,"duration":shot.get("duration",5),"seed":shot.get("seed",0),
@@ -319,7 +346,7 @@ def preflight(plan, input_root):
 
 def agent_catalog(plan):
     validate(plan)
-    return {"schema_version":"1.0","assets":[{k:a[k] for k in ("id","kind","name","aliases","description","voice_id") if k in a} |
+    return {"schema_version":"1.0","assets":[{k:a[k] for k in ("id","kind","name","aliases","description","voice_id","inject_description") if k in a} |
             {"media_types":sorted({m["type"] for m in a.get("media",[])})} for a in plan["assets"]],
             "instructions":"Reference stable IDs as @id. Output {schema_version: 1.0, shots: [{id, name, duration, seed, prompt, continuity, post}]}. Use only listed assets; do not recreate asset cards. Independent continuity: {mode: independent}; continuation: {mode: previous_latent, source_shot: earlier_id}. File paths are omitted."}
 

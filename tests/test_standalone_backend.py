@@ -7,6 +7,13 @@ desk=importlib.import_module(pkg.__name__+'.desk');runtime=importlib.import_modu
 saver=importlib.import_module(pkg.__name__+'.save_video')
 
 class Tests(unittest.TestCase):
+ def test_retired_pixel_option_migrates_without_changing_quality_settings(self):
+  plan={'schema_version':'1.0','id':'retired_pixel','assets':[],'shots':[],'generation':{'376':{'upscale_model':'像素插值（Lanczos）','upscale_method':'像素插值（Lanczos）','refine_steps':3,'refine_strength':.2,'enable_tiling':True}}}
+  result=desk.merge_library(plan,None);cfg=result['generation']['376'];self.assertEqual(cfg['upscale_model'],'minimax_h3_latent_upscaler_3d_fp16.safetensors');self.assertNotIn('upscale_method',cfg);self.assertEqual((cfg['refine_steps'],cfg['refine_strength'],cfg['enable_tiling']),(3,.2,True));self.assertEqual(plan['generation']['376']['upscale_model'],'像素插值（Lanczos）')
+  from unittest.mock import patch
+  hd=importlib.import_module(pkg.__name__+'.vendor.h3.h3_latent_upscale_star7')
+  with patch.object(hd,'_model_directory'),patch.object(hd.folder_paths,'get_filename_list',return_value=['local.safetensors']):
+   self.assertNotIn('像素插值（Lanczos）',hd._model_choices());self.assertNotIn('upscale_method',hd.MiniMaxH3OneClickHDStar7.INPUT_TYPES()['required'])
  def test_segment_and_merged_export_folders_preserve_sources(self):
   import folder_paths,numpy as np,av
   exporter=importlib.import_module(pkg.__name__+'.export_node');movie=importlib.import_module(pkg.__name__+'.combine')

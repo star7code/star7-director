@@ -31,6 +31,10 @@ def merge_library(plan,library):
     if library is not None:
         result['assets']=copy.deepcopy(list(library))
         if hasattr(library,'reference_size'):result['reference_size']=copy.deepcopy(library.reference_size)
+    cfg=result.get('generation',{}).get('376',{})
+    cfg.pop('upscale_method',None)
+    if cfg.get('upscale_model')=='像素插值（Lanczos）':
+        cfg['upscale_model']='minimax_h3_latent_upscaler_3d_fp16.safetensors'
     validate(result)
     return result
 

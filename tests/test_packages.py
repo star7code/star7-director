@@ -8,7 +8,7 @@ from PIL import Image
 class Tests(unittest.TestCase):
  def fixture(self,folder):
   image=folder/'人物.png';Image.new('RGB',(32,32),(10,20,30)).save(image)
-  plan={'schema_version':'1.0','id':'test_project','assets':[{'id':'actor','kind':'character','name':'人物','media':[{'type':'image','source':'actor.png'}]}],'shots':[{'id':'s1','prompt':'@actor walks','duration':2}]}
+  plan={'schema_version':'1.0','id':'test_project','assets':[{'id':'actor','kind':'character','name':'人物','description':'white apron','inject_description':True,'media':[{'type':'image','source':'actor.png'}]}],'shots':[{'id':'s1','prompt':'@actor walks','duration':2}]}
   workflow={'nodes':[{'id':2,'type':'Star7DirectorDesk','inputs':[{'name':'asset_library','link':1}],'widgets_values':[json.dumps(plan)]},{'id':1,'type':'Star7DirectorLibrary','widgets_values':['{}']}],'links':[[1,1,0,2,0,'STAR7_DIRECTOR_ASSET_LIBRARY']]}
   return image,plan,workflow
  def test_roundtrip_excludes_cache_and_preserves_original(self):
@@ -21,7 +21,7 @@ class Tests(unittest.TestCase):
      with zipfile.ZipFile(archive) as z:self.assertEqual(len(z.namelist()),3);self.assertFalse(any('cache' in n or '.safetensors' in n for n in z.namelist()))
      result=packs.import_package(archive)
      self.assertNotEqual(result['plan']['id'],plan['id']);self.assertEqual(result['plan']['assets'][0]['id'],'actor')
-     self.assertEqual(result['plan']['prompt_options'],plan['prompt_options'])
+     self.assertEqual(result['plan']['prompt_options'],plan['prompt_options']);self.assertTrue(result['plan']['assets'][0]['inject_description']);self.assertEqual(result['plan']['assets'][0]['description'],'white apron')
      self.assertEqual(json.loads(result['workflow']['nodes'][0]['widgets_values'][0])['prompt_options'],plan['prompt_options'])
      imported=list((folder/'imported').glob('*.png'))[0];self.assertEqual(imported.read_bytes(),original)
      self.assertEqual(image.read_bytes(),original)

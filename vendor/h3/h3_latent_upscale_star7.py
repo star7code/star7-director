@@ -25,6 +25,7 @@ import folder_paths
 
 from .refine_model_options import (
     INHERIT_FIRST_PASS,
+    NO_LORA,
     apply_selected_lora,
     lora_choices,
     runtime_option_label,
@@ -859,6 +860,7 @@ def _add_hd_endpoint_guides(positive, latent, context):
 
 def _sampling_profile(model, prompt, node_id, video_shift, selected_lora=INHERIT_FIRST_PASS):
     """Classify only schedule families we can distinguish without touching weights."""
+    if selected_lora==NO_LORA:return "base", "Base (no LoRA)"
     ancestors = _prompt_ancestors(prompt, node_id)
     searchable = []
     for node in ancestors:
@@ -1230,7 +1232,7 @@ class MiniMaxH3OneClickHDStar7:
         second_pass_lora_strength = float(second_pass_lora_strength)
         profile_lora = (
             second_pass_lora
-            if second_pass_lora_strength != 0.0
+            if second_pass_lora_strength != 0.0 or second_pass_lora==NO_LORA
             else INHERIT_FIRST_PASS
         )
         profile_key, profile_name = _sampling_profile(
@@ -1266,9 +1268,7 @@ class MiniMaxH3OneClickHDStar7:
             profile_name, runtime_option_label(preset), target_megapixels, refine_steps, refine_strength,
         )
         upscale_started = time.perf_counter()
-        output, video, original_audio, source_w, source_h, output_w, output_h, resized = (
-            _upscale_video(sampled_av_latent, target_megapixels, upscale_model)
-        )
+        output, video, original_audio, source_w, source_h, output_w, output_h, resized = _upscale_video(sampled_av_latent, target_megapixels, upscale_model)
         upscale_seconds = time.perf_counter() - upscale_started
         if resized:
             _LOG.debug(
@@ -1441,6 +1441,7 @@ class MiniMaxH3OneClickHDStar7:
             )
         else:
             tiling_summary = "ignored (refine disabled)" if enable_tiling else "off"
+            _LOG.info("Star7 H3 HD | refinement disabled (strength=0); no DiT sampling or second-pass LoRA; latent upscale + VAE decode only")
             lora_summary = "ignored (refine disabled)"
             attention_summary = "ignored (refine disabled)"
             if context.get("first_frame") is not None or context.get("last_frame") is not None:
@@ -1467,7 +1468,7 @@ class MiniMaxH3OneClickHDStar7:
             f"Star7 H3 HD completed | preset={runtime_option_label(preset)} | {source_w}x{source_h} -> "
             f"{output_w}x{output_h} ({output_w * output_h / 1_000_000:.2f} MP) | "
             f"upscaler={upscale_model} | "
-            f"refine={refine_steps} step(s) strength={refine_strength:.2f} | "
+            f"refine={refine_steps if refine_seconds>0 else 0} step(s) strength={refine_strength:.2f} | "
             f"profile={profile_name} | "
             f"HD keyframes={keyframe_summary} | "
             f"schedule={scheduler_name} | "
@@ -1480,8 +1481,8 @@ class MiniMaxH3OneClickHDStar7:
             "audio preserved exactly"
         )
         _LOG.info(
-            "Star7 H3 HD completed | %dx%d -> %dx%d | profile=%s | refine=%d | total=%.2fs",
-            source_w, source_h, output_w, output_h, profile_name, refine_steps, total,
+            "Star7 H3 HD completed | %dx%d -> %dx%d | profile=%s | refine=%d strength=%.2f | upscale=%.2fs refine=%.2fs total=%.2fs",
+            source_w, source_h, output_w, output_h, profile_name, refine_steps if refine_seconds>0 else 0, refine_strength, upscale_seconds, refine_seconds, total,
         )
         _LOG.debug("%s", report)
         return output, report

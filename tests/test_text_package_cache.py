@@ -8,7 +8,7 @@ class Tests(unittest.TestCase):
   plan={'schema_version':'1.0','id':'p','assets':[{'id':'person','kind':'character','name':'人物1','description':'红衣，使用@音色2','media':[]},{'id':'voice','kind':'voice','name':'音色2','description':'低沉平稳','media':[]}],'shots':[{'id':'s','prompt':'@人物1走来','duration':2,'seed':7}]}
   # Plain names require separation; stable IDs work without whitespace.
   plan['shots'][0]['prompt']='@{person}走来';result=core.compile_shot(plan,'s');self.assertEqual(result['prompt'],'红衣，使用低沉平稳走来');self.assertEqual(result['media']['audio'],[])
-  plan['assets'][0]['voice_id']='voice';self.assertIn('人物1音色：低沉平稳',core.compile_shot(plan,'s')['prompt']);plan['assets'][1]['description']='@{person}'
+  plan['assets'][0]['voice_id']='voice';self.assertEqual(core.compile_shot(plan,'s')['prompt'],'红衣，使用低沉平稳走来');plan['assets'][1]['description']='@{person}'
   with self.assertRaisesRegex(ValueError,'循环'):core.compile_shot(plan,'s')
  def test_package_snapshot_delete_and_protection(self):
   with tempfile.TemporaryDirectory(dir=ROOT) as tmp:

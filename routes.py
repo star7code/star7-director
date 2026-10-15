@@ -139,7 +139,7 @@ async def project_status(request):
                 batch_valid=valid or bool(has_output and parameter_matches(batch_plan(plan,shot['id'],record),shot['id'],pipeline,record))
             except (ValueError,TypeError,KeyError,OSError) as error:problem=str(error)
             try:
-                base,_=Star7DirectorBaseCache().find(plan,shot['id'],pipeline)
+                base,_=Star7DirectorBaseCache().find_for_process(plan,shot['id'],pipeline)
             except (ValueError,TypeError,KeyError,OSError) as error:problem=problem or str(error)
             reason='缓存已清除，请重新生成当前镜头以建立缓存，再执行二采／人脸修复' if not base and store.cache_was_cleared(plan['id'],shot['id']) else '没有与当前参数匹配的基础缓存，请先生成当前镜头'
             result[shot['id']]={'complete':valid,'batch_complete':batch_valid,'stale':has_output and not batch_valid,'parameters_changed':has_output and not valid,'preserves_post':has_output and batch_valid and not valid,'frames':record['frame_count'] if record else None,'has_output':has_output,'base_available':base is not None,'base_reason':problem or ('' if base else reason)}

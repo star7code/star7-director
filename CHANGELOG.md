@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.2.3 — 2026-10-15
+
+- Add an opt-in image-description injection switch for character, scene and prop cards; preserve text and the switch across projects and material/project packages.
+- Keep explicit voice references unchanged except for media-label substitution. When a bound voice is omitted from the prompt, add its actual audio label after the character image label without guessing speaker IDs.
+- Update exported material-outline Skills and examples with explicit voice definitions, audio retention markers and independent speaker numbering.
+- Allow standalone HD/face processing to reuse the exact displayed base cache when only motion-guide drift settings changed. Successful postprocessing acknowledges that choice without rewriting original base provenance; recover older completed process records by exact output/task match.
+- Clear stale parameter notices after a valid unchanged status response and provide a direct link from drift details to its existing settings. Keep experimental motion-guide drift control disabled by default.
+- Add a no-LoRA refinement option on a cloned model; correctly report zero refinement and separate upscale/refine timing.
+- Raise minimum typography to 17px, body text to 18px and headings to 20px; remove the header tagline and align material-description controls.
+- Keep only learned model upscaling and migrate retired interpolation-test settings without changing refinement parameters. No new image-upscale model or external node plugin is installed.
+- Correct current-shot export documentation. Keep the author-provided workflow byte-for-byte unchanged; exclude local projects, materials, models, logs, caches and generated media.
+- GPU quality and runtime improvements are not claimed; high-resolution tiled refinement remains workload-dependent.
+
+
 ## 0.2.2 — 2026-10-15
 
 - Add project-package import at the top of project management and export for each saved project, preserving that project's own workflow and materials.

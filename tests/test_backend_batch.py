@@ -11,6 +11,7 @@ class Tests(unittest.IsolatedAsyncioTestCase):
   class Cache:
    def find(inner,p,sid,prompt):
     file=self.root/(sid+'.safetensors');return ({'artifact':file.name,'version':sid,'fingerprint':'base'} if file.is_file() else None,'base')
+   find_for_process=find
   async def enqueue(p,w,c,o):
    data=json.loads(p[o]['inputs']['project_json']);self.queued.append(data);pid='job'+str(len(self.queued));self.gates[pid]=asyncio.Event();self.entered.set();return pid
   async def wait(pid):

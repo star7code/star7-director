@@ -4,7 +4,7 @@ MODES=('previous_latent','motion_guide','motion_redraw')
 CHOICES=(5,22,39,56)
 def options(plan,shot):
     cfg={**plan.get('continuity_settings',{}),**shot.get('continuity',{})}
-    return {'context_frames':cfg.get('context_frames',22),'audio':cfg.get('audio',True),'redraw':cfg.get('redraw',.65)}
+    return {'context_frames':cfg.get('context_frames',22),'audio':cfg.get('audio',True),'redraw':cfg.get('redraw',.65),'drift_control':cfg.get('drift_control',False),'drift_strength':cfg.get('drift_strength',.3)}
 def source(plan,shot_id,prompt):
     from .runtime import data_root,run_fingerprint,latest_latent,output_matches
     from .storage import Storage
@@ -60,7 +60,11 @@ def apply(plan,shot,positive,latent,video_vae,audio_vae,prompt):
         out,head,gap=apply_latent_continue(latent,prev_av=prev,prev_tail=pixels,vae=video_vae,context_length=cfg['context_frames'],pin_audio=cfg['audio'],context_audio=sound,audio_vae=audio_vae,audio_context_length=cfg['context_frames'],seam_min_mask=cfg['redraw'])
         if gap:raise ValueError('基础缓存尾部需要相位裁剪，请先导出前一镜头后再衔接')
         return positive,out,head
-    out,head,gap=apply_motion_context(positive,latent,vae=video_vae,context_length=cfg['context_frames'],context_latent=prev,context_frames=pixels,context_audio=sound,audio_vae=audio_vae,continue_audio=cfg['audio'],audio_context_length=cfg['context_frames'],keep_existing_keyframes=True)
+    transform=None
+    if cfg['drift_control']:
+        from .context_drift import taper_guides
+        transform=lambda blocks:taper_guides(blocks,cfg['drift_strength'],shot.get('seed',0))
+    out,head,gap=apply_motion_context(positive,latent,vae=video_vae,context_length=cfg['context_frames'],context_latent=prev,context_frames=pixels,context_audio=sound,audio_vae=audio_vae,continue_audio=cfg['audio'],audio_context_length=cfg['context_frames'],keep_existing_keyframes=True,context_transform=transform)
     if gap:raise ValueError('基础缓存尾部需要相位裁剪，请先导出前一镜头后再衔接')
     # Native H3 can pin AV keyframes directly. Move context audio from refs into
     # a time-aligned keyframe so no global PackedLayout timeline patch is needed.

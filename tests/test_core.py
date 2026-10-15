@@ -19,7 +19,7 @@ def project():
 class Tests(unittest.TestCase):
     def test_mentions_allow_sentence_punctuation(self):
         p=project();p['shots'][0]['prompt']='Use @actor. Keep the character consistent.'
-        self.assertIn('<Picture 1>.',compile_shot(p,'s1')['prompt'])
+        self.assertIn('<Picture 1> <Audio 1>.',compile_shot(p,'s1')['prompt'])
     def test_only_selected_and_voice_binding(self):
         item=compile_shot(project(),'s1')
         self.assertEqual(len(item['media']['image']),1)

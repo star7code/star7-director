@@ -6,11 +6,12 @@ import folder_paths
 
 
 INHERIT_FIRST_PASS = "继承一采"
+NO_LORA = "不使用 LoRA"
 
 
 def runtime_option_label(value):
     return {
-        "继承一采": "inherit first pass", "平衡高清": "balanced", "高质量": "high quality",
+        "继承一采": "inherit first pass", "不使用 LoRA": "no LoRA", "平衡高清": "balanced", "高质量": "high quality",
         "远景小脸": "distant faces", "高速运动": "fast motion", "自定义": "custom",
         "自动平衡": "auto balanced", "真人保真": "identity preservation", "动漫角色": "anime",
         "主人物": "main subject", "画面中央": "frame centre", "参考图匹配": "reference match",
@@ -18,13 +19,21 @@ def runtime_option_label(value):
 
 
 def lora_choices() -> list[str]:
-    return [INHERIT_FIRST_PASS, *folder_paths.get_filename_list("loras")]
+    return [INHERIT_FIRST_PASS, NO_LORA, *folder_paths.get_filename_list("loras")]
 
 
 def apply_selected_lora(owner, model, lora_name: str, strength: float = 1.0):
     selected = str(lora_name or INHERIT_FIRST_PASS)
     if selected == INHERIT_FIRST_PASS:
         return model, "inherit first pass"
+    if selected == NO_LORA:
+        import uuid
+        # Leave the first-pass patcher intact. Comfy's clone loader restores
+        # shared base weights before applying this clone's own patch set.
+        patched=model.clone()
+        patched.patches={}
+        patched.patches_uuid=uuid.uuid4()
+        return patched, "no LoRA (inherited weight adapters removed)"
 
     strength = float(strength)
     if strength == 0.0:

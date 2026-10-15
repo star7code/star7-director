@@ -1,15 +1,17 @@
 """Explainable shot edits, deliberately separate from execution/cache hashes."""
 import json,copy
 from pathlib import Path
-from .core import _compile_shot,dependency_source
+from .core import _compile_shot,dependency_source,injects_image_description
 
 PREFIX='v4:'
 
 def snapshot(plan,sid):
     from .runtime import generation_identity
     value=_compile_shot(generation_identity(plan),sid,parameter_payload=True)
+    drift=(value.get('av_handoff') or {}).get('drift_control')
     post=value['shot'].get('post',{})
     value={k:value[k] for k in ('shot','assets','first_from_previous') if k in value}
+    if drift:value['drift_control']=drift
     value['generation']={'395':{'face_count':plan.get('generation',{}).get('395',{}).get('face_count',1)}} if post.get('face') else {}
     # Saved v4 snapshots remain readable through the explicit projection below.
     # File stat revisions belong exclusively to execution/cache fingerprints.
@@ -60,15 +62,41 @@ def uses_previous_tail(plan,sid):
 
 def encode(plan,sid,previous=None):
     source=source_revision(plan,sid)
+    inputs=snapshot(plan,sid)
+    accepted={}
     if previous and plan.get('runtime',{}).get('scope')=='process':
         old=baseline(plan,sid,previous)
-        if old is not None:source=old.get('source')
-    return PREFIX+json.dumps({'inputs':snapshot(plan,sid),'source':source},ensure_ascii=False,sort_keys=True)
+        if old is not None:
+            accepted['accepted_drift_control']=copy.deepcopy(inputs.get('drift_control'))
+            source=old.get('source')
+            inputs.pop('drift_control',None)
+            if old['inputs'].get('drift_control'):inputs['drift_control']=copy.deepcopy(old['inputs']['drift_control'])
+    return PREFIX+json.dumps({'inputs':inputs,'source':source,**accepted},ensure_ascii=False,sort_keys=True)
+
+def comparison_inputs(saved):
+    """A finished postprocess accepts the user's drift choice without rewriting base provenance."""
+    inputs=copy.deepcopy(saved['inputs'])
+    if 'accepted_drift_control' in saved:
+        inputs.pop('drift_control',None)
+        if saved['accepted_drift_control']:inputs['drift_control']=saved['accepted_drift_control']
+    return inputs
 
 def baseline(plan,sid,record):
     from .runtime import data_root
     saved=record.get('parameter_fingerprint','') or ''
-    if saved.startswith(PREFIX):return json.loads(saved[len(PREFIX):])
+    if saved.startswith(PREFIX):
+        result=json.loads(saved[len(PREFIX):])
+        # Recover the accepted choice for postprocessing completed by older
+        # versions. Match the exact output and actual process task, never the
+        # current project settings or an unrelated generation.
+        if 'accepted_drift_control' not in result and result['inputs'].get('drift_control') and any((record.get('post') or {}).get(k) for k in ('hd','face')):
+            for path in sorted((data_root()/'projects'/plan['id']/'batches').glob('*.json'),reverse=True):
+                try:
+                    task=json.loads(path.read_text(encoding='utf-8'));item=task.get('results',{}).get(sid,{})
+                    if task.get('scope')!='process' or item.get('path')!=record.get('path') or not item.get('prompt_id'):continue
+                    result['accepted_drift_control']=snapshot(task['plan'],sid).get('drift_control');break
+                except (OSError,ValueError,TypeError,KeyError):continue
+        return result
     for path in sorted((data_root()/'projects'/plan['id']/'batches').glob('*.json'),reverse=True):
         try:
             task=json.loads(path.read_text(encoding='utf-8'));result=task.get('results',{}).get(sid,{})
@@ -115,11 +143,13 @@ def editable_inputs(value):
         if smart and post.get('face') and card.get('kind')=='character':
             media=[selected_media(m) for m in card.get('media',[])]
         if media or not card.get('media'):
-            assets[card['id']]={'media':media,'description':card.get('description',''),
+            description=card.get('description','') if not card.get('media') or injects_image_description(card,smart) else ''
+            assets[card['id']]={'media':media,'description':description,
+                                'inject_description':injects_image_description(card,smart),
                                 'voice_id':card.get('voice_id') or None}
     return {'duration':shot.get('duration',5),'seed':shot.get('seed',0),'prompt':shot.get('prompt',''),
             'input_mode':'keyframes' if smart else 'reference','continuity':continuity,'keyframes':frames,
-            'references':sorted(shot.get('references') or []),'assets':assets,
+            'references':sorted(shot.get('references') or []),'assets':assets,'drift_control':value.get('drift_control') or None,
             'post':{'hd':bool(post.get('hd')),'face':bool(post.get('face')),
                     'face_count':post.get('face_count',value.get('generation',{}).get('395',{}).get('face_count',1)) if post.get('face') else None},
             'prompt_options':{**{k:bool(shot.get('prompt_options',{}).get(k)) for k in ('no_subtitles','no_background_music')},'custom_prompt':shot.get('prompt_options',{}).get('custom_prompt','').strip()}}
@@ -164,6 +194,8 @@ def visible_changes(old,new,names=None):
                 add('assets.'+aid+'.media',label,'原素材文件或片段','素材文件或片段已更换')
             elif a['voice_id']!=b['voice_id']:
                 add('assets.'+aid+'.voice_id','音色绑定 / '+names.get(aid,'素材'),'原绑定音色','绑定音色已修改')
+            elif a['inject_description']!=b['inject_description']:
+                add('assets.'+aid+'.description','描述词注入 / '+names.get(aid,'素材'),'开启' if a['inject_description'] else '关闭','开启' if b['inject_description'] else '关闭')
             else:
                 add('assets.'+aid+'.description','素材描述 / '+names.get(aid,'素材'),'原素材描述','素材描述已修改')
     for flag,label in (('hd','高清二采'),('face','人脸修复')):
@@ -176,6 +208,9 @@ def visible_changes(old,new,names=None):
             add('shot.prompt_options.'+key,label,'开启' if before['prompt_options'][key] else '关闭','开启' if after['prompt_options'][key] else '关闭')
     if before['prompt_options']['custom_prompt']!=after['prompt_options']['custom_prompt']:
         add('shot.prompt_options.custom_prompt','自定义参数',before['prompt_options']['custom_prompt'] or '未设置',after['prompt_options']['custom_prompt'] or '未设置')
+    if before['drift_control']!=after['drift_control']:
+        a,b=before['drift_control'],after['drift_control']
+        add('shot.continuity.drift_control','运动引导 / 去漂移','关闭' if not a else '开启 · 强度 '+str(a['strength']),'关闭' if not b else '开启 · 强度 '+str(b['strength']))
     return rows
 
 def details(plan,sid,record):
@@ -183,7 +218,7 @@ def details(plan,sid,record):
     old=baseline(plan,sid,record)
     if old is None:return {'changes':[],'reference_changed':False,'baseline_unknown':True}
     changed=source_changed(plan,sid,old.get('source'))
-    changes=visible_changes(old['inputs'],snapshot(plan,sid),{a['id']:a['name'] for a in plan.get('assets',[])})
+    changes=visible_changes(comparison_inputs(old),snapshot(plan,sid),{a['id']:a['name'] for a in plan.get('assets',[])})
     if changed and uses_previous_tail(plan,sid):
         changes.append({'field':'shot.keyframes.first.from_previous.source_version','label':'首帧 / 上段视频尾帧',
                         'before':'原参考画面','after':'上段镜头已重新生成，当前镜头尚未更新'})

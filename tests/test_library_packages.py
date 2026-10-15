@@ -9,12 +9,12 @@ class Tests(unittest.TestCase):
  def test_roundtrip_and_duplicate(self):
   with tempfile.TemporaryDirectory(dir=ROOT) as tmp:
    root=Path(tmp);image=root/'girl.png';Image.new('RGB',(32,32),(10,40,80)).save(image)
-   library={'name':'测试素材库','reference_size':{'mode':'megapixels','image_mp':1.5,'video_mp':0.5},'assets':[{'id':'girl','kind':'character','name':'女生','aliases':['主角'],'description':'外观','media':[{'type':'image','source':'girl.png','original_name':'girl.png'}]},{'id':'fx','kind':'effect','name':'闪光','description':'镜头出现白色闪光','media':[]}]}
+   library={'name':'测试素材库','reference_size':{'mode':'megapixels','image_mp':1.5,'video_mp':0.5},'assets':[{'id':'girl','kind':'character','name':'女生','aliases':['主角'],'description':'外观','inject_description':True,'media':[{'type':'image','source':'girl.png','original_name':'girl.png'}]},{'id':'fx','kind':'effect','name':'闪光','description':'镜头出现白色闪光','media':[]}]}
    with patch.object(runtime,'resolve_media',return_value=image),patch.object(lib,'MEDIA',root/'media'):
     archive=lib.export_library(library)
     try:
      with zipfile.ZipFile(archive) as z:self.assertEqual(len(z.namelist()),3);self.assertIn('index.json',z.namelist());self.assertIn('media/女生.png',z.namelist());self.assertIn('media/闪光.txt',z.namelist())
-     result=lib.import_library(archive,{'name':'素材库','assets':[]});self.assertEqual(result['reference_size'],library['reference_size']);self.assertEqual(result['name'],library['name']);self.assertEqual(len(result['assets']),2);self.assertEqual(result['assets'][0]['aliases'],['主角']);self.assertEqual(result['assets'][1]['description'],'镜头出现白色闪光')
+     result=lib.import_library(archive,{'name':'素材库','assets':[]});self.assertEqual(result['reference_size'],library['reference_size']);self.assertEqual(result['name'],library['name']);self.assertEqual(len(result['assets']),2);self.assertEqual(result['assets'][0]['aliases'],['主角']);self.assertTrue(result['assets'][0]['inject_description']);self.assertEqual(result['assets'][1]['description'],'镜头出现白色闪光')
      before=set((root/'media').iterdir());again=lib.import_library(archive,result);self.assertEqual(len(again['assets']),2);self.assertEqual(before,set((root/'media').iterdir()))
     finally:archive.unlink()
  def test_plain_zip_text_and_rejection(self):

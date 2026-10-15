@@ -166,10 +166,10 @@ def output_matches(plan,shot_id,prompt,record):
 def parameter_matches(plan,shot_id,prompt,record):
     """Own generation settings only; changing an upstream result is not an edit."""
     if not record:return False
-    from .parameter_state import baseline,snapshot,visible_changes,source_changed,uses_previous_tail
+    from .parameter_state import baseline,snapshot,visible_changes,source_changed,uses_previous_tail,comparison_inputs
     saved_inputs=baseline(plan,shot_id,record)
     if saved_inputs is not None:
-        return not visible_changes(saved_inputs['inputs'],snapshot(plan,shot_id)) and not (
+        return not visible_changes(comparison_inputs(saved_inputs),snapshot(plan,shot_id)) and not (
             uses_previous_tail(plan,shot_id) and source_changed(plan,shot_id,saved_inputs.get('source')))
     expected='v3:'+run_fingerprint(plan,shot_id,prompt,parameter_only=True)
     saved=record.get('parameter_fingerprint')
@@ -428,6 +428,21 @@ class Star7DirectorComplete:
         return ('镜头已完成：'+shot_id,)
 
 class Star7DirectorBaseCache:
+    def find_for_process(self,plan,sid,prompt):
+        row,fingerprint=self.find(plan,sid,prompt)
+        if row:return row,fingerprint
+        from .parameter_state import baseline,snapshot,visible_changes
+        record=Storage(data_root()).latest_output(plan['id'],sid)
+        if not record or not record.get('base_version'):return None,None
+        old=baseline(plan,sid,record)
+        if old is None:return None,None
+        changes=visible_changes(old['inputs'],snapshot(plan,sid))
+        if any(c['field'] not in ('shot.continuity.drift_control','shot.post.hd','shot.post.face','shot.post.face_count') for c in changes):return None,None
+        import copy
+        source=copy.deepcopy(plan);drift=old['inputs'].get('drift_control') or {}
+        source['continuity_settings']={**source.get('continuity_settings',{}),'drift_control':bool(drift),'drift_strength':drift.get('strength',.3)}
+        row,fingerprint=self.find(source,sid,prompt)
+        return (row,fingerprint) if row and row['version']==record['base_version'] else (None,None)
     @classmethod
     def INPUT_TYPES(cls):return {'required':{'latent':('LATENT',{'lazy':True}),'director_plan':('STAR7_DIRECTOR_PLAN',),'shot_id':('STRING',{'default':'shot_001'})},'hidden':{'prompt':'PROMPT'}}
     RETURN_TYPES=('LATENT','STRING')

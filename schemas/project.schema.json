@@ -102,6 +102,10 @@
                 }
               }
             }
+          },
+          "inject_description": {
+            "type": "boolean",
+            "default": false
           }
         }
       }

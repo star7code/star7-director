@@ -297,6 +297,7 @@ def apply_motion_context(
     vae,
     context_length: int,
     context_latent: dict | None = None,
+    context_transform=None,
     context_frames: torch.Tensor | None = None,
     context_audio: dict | None = None,
     audio_vae=None,
@@ -423,6 +424,8 @@ def apply_motion_context(
         pin_end_px = available
         prev_export_trim_tail = 0
 
+    if context_transform is not None:
+        blocks=context_transform(blocks)
     ctx_keyframes = [
         {
             "resolved_frame_index": 0,
