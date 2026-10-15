@@ -1,0 +1,35 @@
+name: Publish to Comfy Registry
+
+# Deliberately manual: a normal push must not publish a version unexpectedly.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: comfy-registry-publish
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check Registry configuration
+        env:
+          REGISTRY_ACCESS_TOKEN: ${{ secrets.REGISTRY_ACCESS_TOKEN }}
+        run: |
+          python - <<'PY'
+          import os, pathlib, tomllib
+          config = tomllib.loads(pathlib.Path('pyproject.toml').read_text())
+          if not config['tool']['comfy']['PublisherId'].strip():
+              raise SystemExit('Registry publisher ID has not been configured.')
+          if not os.environ.get('REGISTRY_ACCESS_TOKEN'):
+              raise SystemExit('Missing REGISTRY_ACCESS_TOKEN repository secret.')
+          PY
+      - name: Publish reviewed package
+        uses: Comfy-Org/publish-node-action@main
+        with:
+          skip_checkout: 'true'
+          personal_access_token: ${{ secrets.REGISTRY_ACCESS_TOKEN }}

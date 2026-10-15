@@ -4,4 +4,6 @@ Pillow
 av
 safetensors
 imageio-ffmpeg
-ultralytics
+ultralytics>=8.3.162
+scipy
+scenedetect>=0.7

@@ -1,7 +1,8 @@
 """Two-node director with a private execution plan, not extra canvas nodes."""
-import copy,json
+import copy,json,time,logging
 from pathlib import Path
 from .core import validate,compile_plan
+from .run_logging import DirectorExecutionError,STAGES,event
 
 TEMPLATE=Path(__file__).with_name('pipeline.json')
 
@@ -124,9 +125,12 @@ def execute_internal(graph,result,plan,shot_id,prompt=None):
     def resolve(value):return run(value[0])[value[1]] if is_link(value) and value[0] in graph else value
     def run(key):
         if key in values:return values[key]
-        if key in active:raise ValueError('导演台内部执行计划存在循环')
-        active.add(key);spec=graph[key];cls=registry(spec['class_type']);obj=cls()
+        if key in active:raise ValueError('Director execution plan contains a cycle')
+        active.add(key);spec=graph[key];started=None
+        stage=STAGES.get(key.rsplit('.',1)[-1],spec['class_type'])
+        context={'project':plan.get('id'),'shot':shot_id,'stage':stage,'node':key}
         try:
+            cls=registry(spec['class_type']);obj=cls()
             comfy.model_management.throw_exception_if_processing_interrupted()
             lazy=spec['class_type']=='Star7DirectorBaseCache' and not obj.check_lazy_status(plan,shot_id,prompt=prompt)
             inputs={name:resolve(value) for name,value in spec['inputs'].items() if not (lazy and name=='latent')}
@@ -134,15 +138,22 @@ def execute_internal(graph,result,plan,shot_id,prompt=None):
             for name,kind in hidden.items():
                 if kind=='PROMPT':inputs[name]=prompt
                 elif kind=='UNIQUE_ID':inputs[name]=key
+            started=time.perf_counter()
+            if stage in STAGES.values():event('step_start',**context)
             output=getattr(obj,cls.FUNCTION)(**inputs)
             if isinstance(output,dict):
                 for name,items in output.get('ui',{}).items():ui.setdefault(name,[]).extend(items)
-            values[key]=unpack(output);return values[key]
+            values[key]=unpack(output)
+            if stage in STAGES.values():event('step_complete',**context,seconds=round(time.perf_counter()-started,3))
+            return values[key]
         except Exception as error:
-            if isinstance(error,comfy.model_management.InterruptProcessingException):raise
-            labels={'601':'素材与H3条件','127':'一采','376':'高清二采','395':'人脸修复','377':'音视频解码','150':'MP4编码'}
-            label=labels.get(key.rsplit('.',1)[-1],spec['class_type'])
-            raise ValueError('导演台 '+label+' 失败：'+str(error)) from error
+            if isinstance(error,DirectorExecutionError):raise
+            if isinstance(error,comfy.model_management.InterruptProcessingException):
+                if started is not None:event('step_interrupted',**context,seconds=round(time.perf_counter()-started,3))
+                raise
+            event('step_failed',level=logging.ERROR,**context,error_type=type(error).__name__,error=str(error),
+                  seconds=round(time.perf_counter()-started,3) if started is not None else None)
+            raise DirectorExecutionError(stage,key,error) from error
         finally:active.remove(key)
     report=resolve(result)
     return {'result':(report,),'ui':ui}

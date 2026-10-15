@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 from .core import compile_shot,compile_plan,preflight,identifier
 from .storage import Storage
+from .run_logging import event
 
 
 def data_root(): return Path(__file__).resolve().parent/'data'
@@ -514,10 +515,13 @@ class Star7DirectorBaseCache:
     def save_or_restore(self,director_plan,shot_id,latent=None,prompt=None):
         store=Storage(data_root());row,fingerprint=self.find(director_plan,shot_id,prompt)
         if director_plan.get('runtime',{}).get('scope','all')!='one' and row is not None:
-            return store.load_latent(director_plan['id'],shot_id,'base',row['version'],fingerprint),row['version']
+            latent=store.load_latent(director_plan['id'],shot_id,'base',row['version'],fingerprint)
+            event('base_cache_restored',project=director_plan['id'],shot=shot_id,version=row['version'])
+            return latent,row['version']
         if latent is None:raise ValueError('基础采样没有返回 latent')
         version=store.save_latent(director_plan['id'],shot_id,'base',fingerprint,latent)
         store.alias_base(director_plan['id'],shot_id,version,'semantic:'+run_fingerprint(director_plan,shot_id,prompt,stage='base',parameter_only=True))
+        event('base_cache_saved',project=director_plan['id'],shot=shot_id,version=version)
         return latent,version
 
 class Star7DirectorSamplingModel:

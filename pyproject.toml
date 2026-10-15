@@ -1,0 +1,28 @@
+[project]
+name = "star7-director"
+version = "0.2.4"
+description = "A two-node MiniMax H3 director desk for storyboards, materials, staged generation, previews and video export."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { file = "LICENSE" }
+dependencies = [
+  "aiohttp",
+  "numpy",
+  "Pillow",
+  "av",
+  "safetensors",
+  "imageio-ffmpeg",
+  "ultralytics>=8.3.162",
+  "scipy",
+  "scenedetect>=0.7",
+]
+
+[project.urls]
+Repository = "https://github.com/star7code/star7-director"
+Documentation = "https://github.com/star7code/star7-director#readme"
+"Bug Tracker" = "https://github.com/star7code/star7-director/issues"
+
+[tool.comfy]
+PublisherId = "star7code"
+DisplayName = "Star7 导演台 · Star7 Director"
+Icon = "https://raw.githubusercontent.com/star7code/star7-director/main/web/logo.svg"

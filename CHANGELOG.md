@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.2.4 — 2026-10-16
+
+- Add Comfy Registry metadata, an explicit runtime-package exclusion list and a manually triggered publishing workflow.
+- Declare the bundled face-refinement scene-detection and smoothing dependencies explicitly; align the detector minimum with the Star7 H3 backend.
+- Standardize Director operational events in English, with project/shot IDs, stage names, elapsed time and base-cache save/restore records.
+- Report the originating execution failure once, preserving its original exception and traceback instead of relabeling dependent decode/encode steps as additional failures.
+- Preserve interruption handling, lazy cache reuse, Chinese interface labels and the author's example workflow.
+- Exclude local projects, material files, models, caches, logs and developer tests from the Registry package.
+
 ## 0.2.3 — 2026-10-15
 
 - Add an opt-in image-description injection switch for character, scene and prop cards; preserve text and the switch across projects and material/project packages.

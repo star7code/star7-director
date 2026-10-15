@@ -1,5 +1,6 @@
 """Observe Star7 jobs without launching, supervising or changing ComfyUI."""
 import os,json,time,threading,sys,faulthandler,atexit
+from .run_logging import event as log_event
 LOCK=threading.Lock();FAULT_FILE=None
 
 def install_fault_handler(root):
@@ -11,6 +12,8 @@ def install_fault_handler(root):
                 folder=root/'logs';folder.mkdir(exist_ok=True);FAULT_FILE=(folder/'native-fault.log').open('a',encoding='utf8');faulthandler.enable(file=FAULT_FILE,all_threads=True)
             except (OSError,RuntimeError):pass
 def monitor(run,root):
+    started=time.perf_counter()
+    log_event('run_start',project=run['project_id'],run=run['id'],scope=run.get('scope'),shots=len(run['shot_ids']))
     path=root/'projects'/run['project_id']/'diagnostics'/'generation.jsonl'
     try:
         path.parent.mkdir(parents=True,exist_ok=True)
@@ -36,4 +39,6 @@ def monitor(run,root):
     atexit.register(exited)
     def finish():
         stop.set();atexit.unregister(exited);write('end')
+        log_event('run_end',project=run['project_id'],run=run['id'],status=run.get('status'),
+                  completed=run.get('completed'),retained=run.get('retained'),seconds=round(time.perf_counter()-started,3))
     return finish
