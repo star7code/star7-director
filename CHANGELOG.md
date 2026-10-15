@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.2.5 — 2026-10-16
+
+- Explicitly include the author workflow directory in Comfy Registry packages, preserving the original Chinese JSON filename and unchanged workflow content.
+- Verify the actual Registry archive rather than relying only on the local file manifest.
+
 ## 0.2.4 — 2026-10-16
 
 - Add Comfy Registry metadata, an explicit runtime-package exclusion list and a manually triggered publishing workflow.
