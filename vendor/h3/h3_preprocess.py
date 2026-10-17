@@ -5,6 +5,8 @@ import hashlib
 import json
 import logging
 from pathlib import Path
+import platform
+import sys
 
 import torch
 
@@ -12,6 +14,37 @@ _LIBRARY = None
 _CHECKED = False
 _COMPACT_CHECKED = {}
 _LOG = logging.getLogger('Star7-H3-Preprocess')
+
+
+def _manifest_entry(manifest, system=None, machine=None):
+    system = sys.platform if system is None else system
+    machine = platform.machine().lower() if machine is None else machine.lower()
+    if machine not in {'amd64', 'x86_64'} or system not in {'win32', 'linux'}:
+        raise RuntimeError(f'No H3 preprocessing library for {system}/{machine}')
+    if manifest.get('swiglu_divisor', 256) != 256:
+        raise RuntimeError('H3 preprocessing SwiGLU contract mismatch (expected divisor 256)')
+    key = 'windows_x64' if system == 'win32' else 'linux_x86_64'
+    entry = manifest.get(key)
+    if entry is None and system == 'win32' and 'file' in manifest:
+        entry = manifest
+    if not entry:
+        raise RuntimeError(f'No bundled H3 preprocessing library for {key}')
+    return entry
+
+
+def _verify_swiglu_contract(lib, device):
+    # The ABI predates its scale contract: a checksum alone cannot catch a
+    # consistently packaged /128 library paired with our *256 callers.
+    with torch.cuda.device(device):
+        value = torch.tensor([[2.0, 4.0]], device=device, dtype=torch.float16)
+        output = torch.empty((1, 1), device=device, dtype=torch.float16)
+        error = lib.star7_h3_swiglu_fp16(value.data_ptr(), output.data_ptr(), 1, 1,
+                                        torch.cuda.current_stream(device).cuda_stream)
+        if error:
+            raise RuntimeError(f'H3 preprocessing self-test CUDA error {error}')
+        expected = (torch.nn.functional.silu(value[:, :1].float()) * value[:, 1:].float() / 256).half()
+        if not torch.allclose(output, expected, rtol=0.001, atol=1e-5):
+            raise RuntimeError('H3 preprocessing SwiGLU self-test failed; using the native Torch path')
 
 
 def available(device):
@@ -23,8 +56,9 @@ def available(device):
         try:
             root = Path(__file__).parent / 'bin'
             manifest = json.loads((root / 'h3_preprocess_manifest.json').read_text(encoding='utf-8-sig'))
-            path = root / manifest['file']
-            if hashlib.sha256(path.read_bytes()).hexdigest() != manifest['sha256']:
+            entry = _manifest_entry(manifest)
+            path = root / entry['file']
+            if hashlib.sha256(path.read_bytes()).hexdigest() != entry['sha256']:
                 raise RuntimeError('H3 preprocessing library checksum mismatch')
             lib = ctypes.CDLL(str(path))
             lib.star7_h3_preprocess_abi.restype = ctypes.c_int
@@ -38,6 +72,7 @@ def available(device):
             lib.star7_h3_k_anchor.restype = ctypes.c_int
             lib.star7_h3_quant_k.argtypes = [ctypes.c_void_p] * 4 + [ctypes.c_int] * 2 + [ctypes.c_uint64]
             lib.star7_h3_quant_k.restype = ctypes.c_int
+            _verify_swiglu_contract(lib, device)
             _LIBRARY = lib
         except (OSError, RuntimeError, AttributeError, ValueError) as error:
             _LOG.warning('[Star7 H3 Preprocess] Native library unavailable: %s', error)

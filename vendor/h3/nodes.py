@@ -23,7 +23,7 @@ except ImportError:
     import sm80_diagnostics
 
 _LOG = logging.getLogger("MiniMaxH3ActivationChunkStar7")
-NODE_VERSION = "2.18.7"
+NODE_VERSION = "2.18.8"
 FP16_EXACT_PATCH_FLAG = "star7_minimax_h3_fp16_exact_fix"
 HYBRID_ALL_INT8_BACKEND_NAME = "hybrid_sm75_ck_sla_all_int8"
 SM86PLUS_BACKEND_NAME = "sla_sm80+_qk_int8_pv_bf16"
@@ -1245,15 +1245,15 @@ def _resident_fp16_exact_mlp_callers(mlp, x: torch.Tensor):
     backends = []
     for linear in (mlp.fc1, mlp.fc2):
         quant_mode = _linear_quantization_mode(linear)
-        stage_dtype = linear.weight.dtype if quant_mode == "weight-only" else x.dtype
+        stage_dtype = linear.weight.dtype if quant_mode == "weight-only" else torch.float16
         with comfy.ops.CastBiasWeightContext(
             linear,
             input=None,
             dtype=stage_dtype,
             device=x.device,
-            bias_dtype=x.dtype,
+            bias_dtype=torch.float16,
             offloadable=True,
-            compute_dtype=x.dtype,
+            compute_dtype=torch.float16,
             want_requant=quant_mode is not None,
         ) as (weight, bias):
             if isinstance(weight, comfy.ops.QuantizedTensor):
@@ -1348,6 +1348,8 @@ def _run_chunked_h3_mlp(
             )
             if resident_callers is not None:
                 fc1_call, fc2_call, _ = resident_callers
+                if mode == "fp16-exact-resident":
+                    chunk_input = chunk_input.to(torch.float16)
                 projected = fc1_call(chunk_input)
                 result = fc2_call(projected, input_act="swiglu")
                 if result is None:
@@ -1410,8 +1412,8 @@ def _run_chunked_h3_mlp(
     if do_profile:
         _PROFILED_MLP_SHAPES.add(profile_key)
         _LOG.info(
-            "[Star7 H3 Chunk] First-block MLP | S=%d | chunk=%d x %d | mode=%s%s",
-            seq_len, current_chunk, calls, mode,
+            "[Star7 H3 Chunk] First-block MLP | S=%d | chunk=%d x %d | reuse-input=%s | mode=%s%s",
+            seq_len, current_chunk, calls, output is x, mode,
             " | w4a8=" + star7_w4a8.runtime_summary() if mode == "fp16-exact-resident" else "",
         )
 
@@ -4081,6 +4083,9 @@ def install_model_patch(
     # Chunk only controls token tiling. If another node already patched the MLP
     # (including FP16 Exact), invoke that exact upstream callable per tile rather
     # than copying its precision formula into this project.
+    transformer_options["star7_fp16_mlp_input_reuse"] = bool(
+        int(mlp_chunk_tokens) != 0 and star7_fp16
+    )
     if int(mlp_chunk_tokens) != 0:
         for index, block in enumerate(diffusion_model.blocks):
             mlp_path = f"diffusion_model.blocks.{index}.mlp.forward"
@@ -4090,6 +4095,11 @@ def install_model_patch(
                 upstream_mlp = _star7_wrapper_original(
                     upstream_mlp, "mlp-chunk-upstream"
                 )
+            # FP32 input reuse is opt-in: foreign MLP patches keep their dtype contract.
+            block.mlp._star7_fp16_chunk_input = bool(
+                star7_fp16 and upstream_mlp is not None
+                and _callable_source(upstream_mlp).endswith("/adaptive_loader.py")
+            )
             mlp_forward = _make_chunked_h3_mlp_forward(upstream_mlp)
             patched.add_object_patch(
                 mlp_path,

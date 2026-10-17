@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.2.7 — 2026-10-18
+
+- Synchronize embedded H3 chunked MLP carrier reuse and platform-aware preprocessing selection, preserving FP16 compute and the existing /256 SwiGLU contract.
+- When a workflow uses MiniMax H3 Enhanced Loader, update its H3 Chunk package to 2.18.8 as well: the loader owns the per-token AdaLN memory fix used by tiled HD refinement. Tile count alone does not bound those indexed temporary tensors.
+- Keep exactly two public nodes, the author workflow and project/cache formats unchanged. No local projects, media, models, experimental kernels or development artifacts are included.
+
 ## 0.2.6 — 2026-10-17
 
 - Use output-version-bound base/final latent caches for Motion Guide; retain native decode phase and delivery duration, pin the HD reference prefix and validate missing legacy data before sampling.
