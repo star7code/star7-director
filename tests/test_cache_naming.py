@@ -13,7 +13,8 @@ class Tests(unittest.TestCase):
    with self.assertRaises(ValueError):cache.clear(root,'current','selected_checkpoints',project_ids=['other','not_real'])
    self.assertTrue(all(p.exists() for p in files.values()))
    result=cache.clear(root,'current','selected_checkpoints',project_ids=['other']);self.assertEqual(result['freed_bytes'],5);self.assertFalse(files['other'].exists());self.assertTrue(files['current'].exists());self.assertTrue(files['keep'].exists())
-   cache.clear(root,'current','selected_checkpoints',project_ids=['current']);self.assertFalse(files['current'].exists());self.assertTrue(files['keep'].exists())
+   with self.assertRaisesRegex(ValueError,'当前项目'):cache.clear(root,'current','selected_checkpoints',project_ids=['current'])
+   cache.clear(root,'keep','selected_checkpoints',project_ids=['current']);self.assertFalse(files['current'].exists());self.assertTrue(files['keep'].exists())
    for pid in files:self.assertEqual((root/(pid+'.mp4')).read_bytes(),b'video');self.assertIsNotNone(store.latest_output(pid,'shot'))
  def test_other_projects_and_current_project_are_separate(self):
   with tempfile.TemporaryDirectory(dir=ROOT) as temp:
@@ -23,7 +24,8 @@ class Tests(unittest.TestCase):
     video=root/(pid+'.mp4');video.write_bytes(b'video');store.record_output(pid,'shot','fp',str(video),24)
     with store.db(pid) as db:db.execute('INSERT INTO stages VALUES (?,?,?,?,?,?)',(pid,'shot','base','v','fp',str(p.relative_to(root))))
    result=cache.clear(root,'current','other_checkpoints');self.assertEqual(result['freed_bytes'],5);self.assertTrue(files['current'].is_file());self.assertFalse(files['old'].exists());self.assertEqual(result['checkpoint_bytes'],5);self.assertEqual(result['other_checkpoint_bytes'],0)
-   cache.clear(root,'current','checkpoints');self.assertFalse(files['current'].exists());self.assertTrue(store.cache_was_cleared('current','shot'));self.assertTrue(store.cache_was_cleared('old','shot'))
+   with self.assertRaisesRegex(ValueError,'当前项目'):cache.clear(root,'current','checkpoints')
+   cache.clear(root,'old','selected_checkpoints',project_ids=['current']);self.assertFalse(files['current'].exists());self.assertTrue(store.cache_was_cleared('current','shot'));self.assertTrue(store.cache_was_cleared('old','shot'))
    for pid in ('current','old'):self.assertEqual((root/(pid+'.mp4')).read_bytes(),b'video');self.assertIsNotNone(store.latest_output(pid,'shot'))
    import torch
    store.save_latent('current','shot','base','new_fp',{'samples':torch.ones(1)})
@@ -47,12 +49,13 @@ class Tests(unittest.TestCase):
    with store.db('project') as db:db.execute('INSERT INTO stages VALUES (?,?,?,?,?,?)',('project','shot','base','version','fingerprint',str(latent.relative_to(root))))
    before=cache.stats(root,'project');self.assertEqual(before['temporary_bytes'],3);self.assertEqual(before['checkpoint_bytes'],12);self.assertEqual(before['material_bytes'],8)
    cache.clear(root,'project','temporary');self.assertFalse(stale.exists());self.assertTrue(fresh.exists());self.assertTrue(latent.exists())
-   cache.clear(root,'project','checkpoints');self.assertFalse(latent.exists());self.assertTrue(original.exists());self.assertTrue(final.exists());self.assertEqual(store.stages('project'),[])
+   with self.assertRaisesRegex(ValueError,'当前项目'):cache.clear(root,'project','checkpoints')
+   cache.clear(root,'different','selected_checkpoints',project_ids=['project']);self.assertFalse(latent.exists());self.assertTrue(original.exists());self.assertTrue(final.exists());self.assertEqual(store.stages('project'),[])
  def test_invalid_cache_path_rejected(self):
   with tempfile.TemporaryDirectory(dir=ROOT) as temp:
    root=Path(temp);store=cache.Storage(root);media=root/'media';media.mkdir();file=media/'file.safetensors';file.write_bytes(b'keep')
    with store.db('project') as db:db.execute('INSERT INTO stages VALUES (?,?,?,?,?,?)',('project','shot','base','version','fp','media/file.safetensors'))
-   with self.assertRaises(ValueError):cache.clear(root,'project','checkpoints')
+   with self.assertRaises(ValueError):cache.clear(root,'different','selected_checkpoints',project_ids=['project'])
    self.assertTrue(file.exists())
  def test_package_groups_clear_only_selected_temporary_files(self):
   index=importlib.import_module(pkg.__name__+'.package_index')
@@ -60,7 +63,7 @@ class Tests(unittest.TestCase):
    root=Path(temp);folder=root/'packages';folder.mkdir();media=root/'media';media.mkdir();original=media/'actor.png';original.write_bytes(b'original')
    first=folder/'first.upload';second=folder/'second.upload';first.write_bytes(b'first');second.write_bytes(b'second')
    for file in (first,second):os.utime(file,(time.time()-90000,)*2)
-   one=index.begin(root,'人物包.zip',first);two=index.begin(root,'场景包.zip',second);index.update(root,one,sources=['star7-director/actor.png'])
+   one=index.begin(root,'人物包.zip',first);two=index.begin(root,'场景包.zip',second);index.update(root,one,state='failed',sources=['star7-director/actor.png']);index.update(root,two,state='failed')
    groups=cache.stats(root,'project')['packages'];self.assertEqual([g['name'] for g in groups],['人物包.zip','场景包.zip']);self.assertEqual(groups[0]['temporary_bytes'],5)
    cache.clear(root,'project','package',one);self.assertFalse(first.exists());self.assertTrue(second.exists());self.assertTrue(original.exists());self.assertEqual(cache.stats(root,'project')['packages'][1]['temporary_bytes'],6)
 if __name__=='__main__':unittest.main()

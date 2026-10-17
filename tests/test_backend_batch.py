@@ -37,6 +37,30 @@ class Tests(unittest.IsolatedAsyncioTestCase):
   self.gates['job1'].set();await self.wait_count(2);self.assertEqual(self.queued[1]['shots'][1]['prompt'],'garden');self.gates['job2'].set();await b.TASKS[r['id']]
   self.assertEqual(b.state(r['id'])['status'],'stopped');self.assertEqual(len(self.queued),2)
   r2=await self.begin();await self.wait_count(3);self.gates['job3'].set();await b.TASKS[r2['id']];self.assertEqual(b.state(r2['id'])['retained'],2);self.assertEqual(b.state(r2['id'])['completed'],1)
+ async def test_stop_active_job_skips_unavailable_dependents_and_continues_independent(self):
+  p=plan();p['shots'][1]['continuity']={'mode':'tail_reference','source_shot':'a'}
+  original_wait=b.wait_job
+  async def wait(pid):
+   if pid=='job1':
+    await self.gates[pid].wait();raise ValueError('native worker interrupted')
+   return await original_wait(pid)
+  with patch.object(b,'wait_job',side_effect=wait),patch.object(b,'stop_prompt',side_effect=lambda pid:self.gates[pid].set()) as stop:
+   r=await self.begin(p);await self.wait_count(1);preview=b.cancel_item(r['id'],'a')
+   self.assertTrue(preview['stopping']);self.assertEqual([x['shot_id'] for x in preview['affected']],['a','c'])
+   b.cancel_item(r['id'],'a',True);stop.assert_called_once_with('job1')
+   self.assertEqual(b.state(r['id'])['queue_items'][0]['status'],'stopping')
+   await self.wait_count(2);self.assertEqual(self.queued[1]['runtime']['active_shot_id'],'d');self.gates['job2'].set();await b.TASKS[r['id']]
+   self.assertEqual(b.state(r['id'])['status'],'completed');self.assertEqual(b.state(r['id'])['completed'],1)
+ async def test_stop_postprocessing_preserves_fresh_base_output(self):
+  p=plan();p['shots'][0]['post']={'hd':True,'face':False};original_wait=b.wait_job
+  async def wait(pid):
+   if pid=='job2':
+    await self.gates[pid].wait();raise ValueError('native worker interrupted')
+   return await original_wait(pid)
+  with patch.object(b,'wait_job',side_effect=wait),patch.object(b,'stop_prompt',side_effect=lambda pid:self.gates[pid].set()) as stop:
+   r=await self.begin(p,'one');await self.wait_count(1);self.gates['job1'].set();await self.wait_count(2)
+   record=b.Storage(self.root).latest_output(p['id'],'a');b.cancel_item(r['id'],'a',True);await b.TASKS[r['id']]
+   stop.assert_called_once_with('job2');self.assertEqual(b.Storage(self.root).latest_output(p['id'],'a'),record);self.assertEqual(record['post'],{'hd':False,'face':False});self.assertEqual(len(self.queued),2)
  async def test_all_hd_reuses_base_and_does_not_advance_sampling_seed(self):
   p=plan();p['shots']=p['shots'][:2];store=b.Storage(self.root)
   for s in p['shots']:
@@ -144,7 +168,8 @@ class Tests(unittest.IsolatedAsyncioTestCase):
   args={'plan':p,'prepared':{'output':{'10':{'class_type':'Star7DirectorDesk','inputs':{}}}},'owner_id':'10','scope':'one'}
   second=await b.start({**args,'shot_id':'c'});third=await b.start({**args,'shot_id':'d'})
   preview=b.cancel_item(second['id'],'c');self.assertEqual([i['shot_id'] for i in preview['affected']],['c']);b.cancel_item(second['id'],'c',True)
-  with self.assertRaises(ValueError):b.cancel_item(first['id'],'a',True)
+  with patch.object(b,'stop_prompt',return_value=True) as stop:
+   b.cancel_item(first['id'],'a',True);stop.assert_called_once_with('job1')
   self.gates['job1'].set();await self.wait_count(2);self.assertEqual(self.queued[1]['runtime']['active_shot_id'],'d');self.gates['job2'].set();await b.TASKS[third['id']]
   self.assertEqual(len(self.queued),2)
  async def test_missing_dynamic_first_frame_skips_to_uploaded_independent_shot(self):

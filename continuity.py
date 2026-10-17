@@ -53,6 +53,19 @@ def apply(plan,shot,positive,latent,video_vae,audio_vae,prompt):
     from .vendor.aimixer.h3_motion_context import apply_motion_context,CTX_AUDIO_END_KEY,CTX_FRAME_KEY,FPS,AUDIO_HZ
     from .vendor.aimixer.h3_latent_continue import apply_latent_continue
     info=source(plan,shot['id'],prompt);cfg=options(plan,shot)
+    if shot['continuity']['mode'] in ('motion_guide','previous_latent'):
+        from .handoff import apply_base
+        out,result,head=apply_base(plan,shot,positive,latent,info,video_vae,audio_vae,cfg)
+        native=[]
+        for embedding,metadata in out:
+            meta=dict(metadata);refs=[]
+            keyframes=[{**kf,'resolved_frame_index':int(kf[CTX_FRAME_KEY])} if CTX_FRAME_KEY in kf else dict(kf) for kf in meta.get('minimax_keyframes',[])]
+            for ref in meta.get('minimax_refs',[]):
+                if CTX_AUDIO_END_KEY not in ref:refs.append(ref);continue
+                ticks=int(ref.get('ref_audio_t',0));start=round(float(ref[CTX_AUDIO_END_KEY])-ticks/AUDIO_HZ*FPS)
+                keyframes.append({'resolved_frame_index':start,'audio_latent':ref['audio_latent']})
+            meta['minimax_refs']=refs;meta['minimax_keyframes']=keyframes;native.append([embedding,meta])
+        return native,result,head
     prev=info.get('latent');pixels=sound=None
     if 'path' in info:pixels,sound=export_tail(info,cfg['context_frames'],cfg['audio'])
     mode=shot['continuity']['mode']

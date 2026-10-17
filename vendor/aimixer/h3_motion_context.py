@@ -305,6 +305,7 @@ def apply_motion_context(
     keep_existing_keyframes: bool = True,
     context_end_frame: int | None = None,
     audio_context_length: int | None = None,
+    exact_context_length: bool = False,
 ) -> tuple[Any, int, int]:
     """Inject previous-segment motion (and optional audio) into conditioning.
 
@@ -328,7 +329,11 @@ def apply_motion_context(
     # r2v/v2v/rv2v already carry minimax_refs; stock payload overwrites keyframe
     # video latents unless coexistence merge is installed.
     ensure_payload_patch()
-    context_length = snap_context_frames(context_length)
+    if exact_context_length:
+        if int(context_length) not in VIDEO_RUN_GRID:raise ValueError('Invalid exact H3 context window')
+        context_length=int(context_length)
+    else:
+        context_length = snap_context_frames(context_length)
     if audio_context_length is None:
         audio_ctx = DEFAULT_AUDIO_CONTEXT_FRAMES
     else:

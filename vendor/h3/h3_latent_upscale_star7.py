@@ -484,6 +484,18 @@ def _tile_keyframes(keyframes, tile):
     return tiled
 
 
+def _tile_video_mask(mask, full_shape, tile):
+    """Crop the model's video mask separately from the packed solver mask."""
+    if not isinstance(mask,torch.Tensor) or mask.ndim!=5:
+        raise RuntimeError('Star7 HD video denoise mask must be a 5D tensor')
+    height,width=map(int,full_shape[-2:])
+    if mask.shape[-2] not in (1,height) or mask.shape[-1] not in (1,width):
+        raise RuntimeError('Star7 HD video denoise mask does not match the full canvas')
+    top,bottom,left,right=tile
+    return mask[...,slice(top,bottom) if mask.shape[-2]!=1 else slice(None),
+                slice(left,right) if mask.shape[-1]!=1 else slice(None)]
+
+
 def _preserve_global_tile_positions(old_layout, tile_layout, tile):
     """Give a tile its coordinates within the full H3 canvas, not a new local origin."""
     old_segments = list(getattr(old_layout, "segments", ()) or ())
@@ -623,20 +635,28 @@ class _SpatialTileModel:
                 if prepared is not None:
                     prepared.latent_shapes = tile_shapes
 
+                seen_conditions=set()
                 for group in groups.values():
                     for cond in group or []:
                         model_conds = cond.get("model_conds", {}) if isinstance(cond, dict) else {}
                         shape_cond = model_conds.get("latent_shapes")
-                        if shape_cond is not None and hasattr(shape_cond, "cond"):
+                        if shape_cond is not None and hasattr(shape_cond, "cond") and id(shape_cond) not in seen_conditions:
+                            seen_conditions.add(id(shape_cond))
                             condition_restores.append((shape_cond, shape_cond.cond))
                             shape_cond.cond = tile_shapes
                         payload_cond = model_conds.get("minimax_payload")
                         payload = getattr(payload_cond, "cond", None)
-                        if isinstance(payload, dict):
+                        if isinstance(payload, dict) and id(payload_cond) not in seen_conditions:
+                            seen_conditions.add(id(payload_cond))
                             payload_restores.append((payload_cond, payload_cond.cond))
                             payload_cond.cond = _tile_payload(
                                 payload, tile_shapes, tile
                             )
+                        mask_cond=model_conds.get('denoise_mask')
+                        if mask_cond is not None and hasattr(mask_cond,'cond') and id(mask_cond) not in seen_conditions:
+                            seen_conditions.add(id(mask_cond))
+                            condition_restores.append((mask_cond,mask_cond.cond))
+                            mask_cond.cond=_tile_video_mask(mask_cond.cond,self._full_shapes[0],tile)
 
                 tile_args = dict(extra_args)
                 tile_transformer_options = None
@@ -1287,12 +1307,20 @@ class MiniMaxH3OneClickHDStar7:
                 "target <= source; first-pass latent returned unchanged"
             )
             _LOG.info(report)
+            motion_prepare=context.get('star7_motion_refinement')
+            if callable(motion_prepare):
+                output,_=motion_prepare(output,positive)
+                output.pop('noise_mask',None)
+                return output, report
             return sampled_av_latent, report
 
         refine_seconds = 0.0
         sigma_summary = "off"
         scheduler_name = "off"
         keyframe_summary = "none"
+        motion_prepare=context.get('star7_motion_refinement')
+        motion_restore=context.get('star7_motion_restore')
+        protected_motion=None
         if refine_steps > 0 and refine_strength > 0.0:
             from comfy_extras.nodes_custom_sampler import (
                 BasicGuider, BasicScheduler, KSamplerSelect, RandomNoise,
@@ -1302,6 +1330,10 @@ class MiniMaxH3OneClickHDStar7:
             output["noise_mask"] = comfy.nested_tensor.NestedTensor(
                 (torch.ones_like(video), torch.zeros_like(original_audio))
             )
+            if callable(motion_prepare):
+                output,positive=motion_prepare(output,positive)
+                protected_motion=output
+                video=output['samples'].unbind()[0]
             if profile_key == "pdd":
                 sigmas = _pdd_tail_sigmas(
                     pdd_partition, refine_steps, video_shift, audio_shift
@@ -1449,6 +1481,13 @@ class MiniMaxH3OneClickHDStar7:
             _send_sigma_status(
                 unique_id, sigma_summary, 0, 0.0, video_shift, profile_name
             )
+
+        if protected_motion is None and callable(motion_prepare):
+            output,positive=motion_prepare(output,positive)
+            protected_motion=output
+        if protected_motion is not None and callable(motion_restore):
+            output=motion_restore(output,protected_motion)
+            output.pop('noise_mask',None)
 
         forwarded_faces = 0
         if face_overlays:

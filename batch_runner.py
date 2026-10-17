@@ -1,14 +1,64 @@
 """Server-owned sequential ComfyUI jobs. Browser polling is display-only."""
-import asyncio,copy,json,secrets,threading,time,uuid
+import asyncio,copy,json,secrets,time,uuid
 from pathlib import Path
 from .core import validate,preflight,identifier,dependency_source
 from .runtime import data_root,Star7DirectorBaseCache,output_matches,batch_plan,parameter_matches
 from .storage import Storage
 from .generation_checks import validate_generation
 
-LOCK=threading.RLock();RUNS={};TASKS={};MAX_SEED=2**53-1
+from .execution_state import LOCK
+RUNS={};TASKS={};MAX_SEED=2**53-1
+
+def stop_prompt(pid):
+    """Cancel only this native prompt; never set an unscoped interrupt flag."""
+    from server import PromptServer
+    queue=PromptServer.instance.prompt_queue
+    if queue.delete_queue_item(lambda item:item[1]==pid):return True
+    interrupt=getattr(queue,'interrupt_if_running',None)
+    if callable(interrupt):return interrupt(pid)
+    raise ValueError('当前 ComfyUI 不支持安全的指定任务中断，请使用原生队列停止')
+
+async def wait_owned(run,pid,sid):
+    if sid in run.get('cancelled',{}):stop_prompt(pid)
+    try:await wait_job(pid)
+    except Exception:
+        if sid not in run.get('cancelled',{}):raise
+    if sid in run.get('cancelled',{}):
+        update(run,position=run['position']+1,active_shot_id=None,phase=None,message='已停止 '+sid+'；已有视频和缓存保留，继续其他可执行任务。')
+        return False
+    return True
 def active():
     with LOCK:return any(r['status'] in ('queued','running') for r in RUNS.values())
+
+def native_queue_items(project):
+    from .execution_state import native_jobs
+    known={(r.get('prompt_id'),r.get('owner_id')) for r in RUNS.values()}
+    items=[]
+    for job in native_jobs():
+        if job['plan']['id']!=project or (job['prompt_id'],job['owner_id']) in known or job.get('exporting'):continue
+        plan=job['plan'];sid=plan.get('runtime',{}).get('active_shot_id') or (plan.get('shots') or [{}])[0].get('id')
+        found=next(((i+1,s) for i,s in enumerate(plan.get('shots',[])) if s['id']==sid),None)
+        if not found:continue
+        number,shot=found;rid='native:'+job['prompt_id']+':'+job['owner_id'];post=shot.get('post',{})
+        items.append({'key':rid+':'+sid,'run_id':rid,'shot_id':sid,'name':shot.get('name') or sid,'number':number,'stages':['base']+(['hd'] if post.get('hd') else [])+(['face'] if post.get('face') else []),'status':job['status'],'active_stage':None,'origin':'native'})
+    return items
+
+def cancel_native(run_id,shot_id,confirm=False,expected=None):
+    from .execution_state import native_jobs
+    with LOCK:
+        entry=next((j for j in native_jobs() if run_id=='native:'+j['prompt_id']+':'+j['owner_id']),None)
+        if entry is None:raise ValueError('原生任务已结束或队列已变化，请刷新队列')
+        managed=next((r for r in RUNS.values() if r.get('prompt_id')==entry['prompt_id'] and r['owner_id']==entry['owner_id'] and r['status']=='running'),None)
+        if managed:
+            if confirm:raise ValueError('任务已进入导演台执行阶段，请重新点击停止并核对队列')
+            return cancel_item(managed['id'],shot_id)
+        current=entry['plan'].get('runtime',{}).get('active_shot_id') or (entry['plan'].get('shots') or [{}])[0].get('id')
+        if current!=shot_id:raise ValueError('队列已变化，请重新核对镜头')
+        affected=[{'run_id':run_id,'shot_id':shot_id,'name':shot_id,'reason':'用户停止原生运行'}]
+        if confirm:
+            if expected is not None and expected!=[run_id+':'+shot_id]:raise ValueError('队列已变化，请重新核对')
+            stop_prompt(entry['prompt_id'])
+        return {'affected':affected,'confirmed':confirm,'stopping':entry['status']=='running'}
 def folder(project=None):
     p=data_root()/'projects'/identifier(project)/'batches' if project else data_root()/'batches'
     if project:p.mkdir(parents=True,exist_ok=True)
@@ -25,13 +75,14 @@ def queue_items(run):
         remaining=task['shot_ids'][task['position']:]
         if task.get('stop_after') in remaining:remaining=remaining[:remaining.index(task['stop_after'])+1]
         for sid in remaining:
-            if sid in task.get('retain_ids',[]) or sid in task.get('cancelled',{}):continue
+            stopping=sid in task.get('cancelled',{}) and task.get('active_shot_id')==sid and task['status']=='running'
+            if sid in task.get('retain_ids',[]) or sid in task.get('cancelled',{}) and not stopping:continue
             number,shot=shots[sid];post=shot.get('post',{})
             process=task['scope']=='process' or task['scope']=='all' and sid in task.get('base_pins',{}) and (post.get('hd') or post.get('face'))
             stages=task.get('queue_stages',{}).get(sid) or ([] if process else ['base'])+(['hd'] if post.get('hd') else [])+(['face'] if post.get('face') else [])
             active=task['status']=='running' and task.get('active_shot_id')==sid and task.get('phase')!='done'
-            items.append({'key':task['id']+':'+sid,'run_id':task['id'],'shot_id':sid,'name':shot.get('name') or sid,'number':number,'stages':stages,'status':'running' if active else 'queued','active_stage':task.get('phase') if active else None})
-    return items
+            items.append({'key':task['id']+':'+sid,'run_id':task['id'],'shot_id':sid,'name':shot.get('name') or sid,'number':number,'stages':stages,'status':'stopping' if stopping else 'running' if active else 'queued','active_stage':task.get('phase') if active else None})
+    return items+native_queue_items(run['project_id'])
 
 def public(run):
     value=copy.deepcopy({k:v for k,v in run.items() if k not in ('plan','requested_plan','prepared','owner_id','bridge_id','client_id','base_pins','reference_pins')})
@@ -119,7 +170,7 @@ def cancel_item(run_id,shot_id,confirm=False,expected=None):
     with LOCK:
         target=RUNS.get(run_id)
         if not target or target['status'] not in ('queued','running'):raise ValueError('任务已结束')
-        if shot_id in target.get('retain_ids',[]) or shot_id not in target['shot_ids'][target['position']:] or shot_id==target.get('active_shot_id') and target['status']=='running':raise ValueError('只能取消尚未开始的镜头任务')
+        if shot_id in target.get('retain_ids',[]) or shot_id not in target['shot_ids'][target['position']:]:raise ValueError('此镜头任务已结束')
         if shot_id in target.get('cancelled',{}):raise ValueError('此任务已取消')
         tasks=sorted((r for r in RUNS.values() if r['project_id']==target['project_id'] and r['status'] in ('queued','running')),key=lambda r:r['created_at'])
         store=Storage(data_root());available=set();blocked_ids=set();affected=[]
@@ -143,8 +194,10 @@ def cancel_item(run_id,shot_id,confirm=False,expected=None):
                 task=RUNS[item['run_id']];task.setdefault('cancelled',{})[item['shot_id']]=item['reason']
                 if task.get('stop_after')==item['shot_id']:task['stop_after']=None
                 update(task)
+            if target.get('active_shot_id')==shot_id and target['status']=='running' and target.get('prompt_id'):
+                stop_prompt(target['prompt_id'])
             if tasks:update(tasks[0])
-        return {'affected':affected,'confirmed':confirm,'message':'取消后将保留已有视频；缺少前置视频的依赖任务一并取消，其他任务继续。'}
+        return {'affected':affected,'confirmed':confirm,'stopping':target.get('active_shot_id')==shot_id and target['status']=='running','message':'停止／取消后保留已有视频；缺少前置视频的依赖任务一并取消，其他任务继续。'}
 def next_seed(shot):
     value=shot.get('seed',0);mode=shot.get('seed_control','fixed')
     return (value+1)%(MAX_SEED+1) if mode=='increment' else (value-1)%(MAX_SEED+1) if mode=='decrement' else secrets.randbelow(MAX_SEED+1) if mode=='randomize' else value
@@ -205,6 +258,8 @@ async def execute(run):
     try:
         previous=TASKS.get(run.get('predecessor_id'))
         if previous:await asyncio.shield(previous)
+        elif run.get('predecessor_id'):
+            while RUNS.get(run['predecessor_id'],{}).get('status') in ('queued','running'):await asyncio.sleep(.25)
         # Reconcile a queued continue-all with work completed while it waited.
         # Compare the submitted seed, before reserving the next regeneration seed.
         if run.get('predecessor_id') and run['scope']=='all':
@@ -239,6 +294,8 @@ async def execute(run):
             else:
                 row,_=(Star7DirectorBaseCache().find_for_process if run['scope']=='process' else Star7DirectorBaseCache().find)(run['plan'],sid,run['prepared']['output'])
                 post=shot.get('post',{});action='process' if run['scope']=='process' or run['scope']=='all' and row and (post.get('hd') or post.get('face')) else 'one' if run['scope'] in ('one','selected') else 'all'
+                from .handoff import check_request
+                check_request(run['plan'],sid,run['prepared']['output'],processing=action=='process')
                 sampled=action!='process'
                 run.setdefault('queue_stages',{})[sid]=([] if not sampled else ['base'])+(['hd'] if post.get('hd') else [])+(['face'] if post.get('face') else [])
                 if action=='one' and (post.get('hd') or post.get('face')):
@@ -246,7 +303,8 @@ async def execute(run):
                     first,base_nonce=prompt_for(run,sid,'one',first_pass=True)
                     update(run,position=index,active_shot_id=sid,nonce=base_nonce,action='one',phase='base',message='重新生成一采：'+(shot.get('name') or sid))
                     base_pid=await enqueue(first,run['prepared'].get('workflow',{}),run['client_id'],run['owner_id']);update(run,prompt_id=base_pid)
-                    await wait_job(base_pid);base_record=store.latest_output(run['project_id'],sid)
+                    if not await wait_owned(run,base_pid,sid):continue
+                    base_record=store.latest_output(run['project_id'],sid)
                     if not base_record:raise ValueError('一采生成完成，但没有找到一采视频；后处理未启动')
                     run['results'][sid]={'path':base_record['path'],'post':base_record.get('post'),'frames':base_record['frame_count'],'prompt_id':base_pid,'nonce':base_nonce}
                     run['intermediate_nonce']=base_nonce
@@ -264,7 +322,8 @@ async def execute(run):
                 phase='hd' if action=='process' and post.get('hd') else 'face' if action=='process' and post.get('face') else 'base'
                 update(run,position=index,active_shot_id=sid,nonce=nonce,action=action,phase=phase,message='处理 '+(shot.get('name') or sid)+'。'+' '.join(run.get('warnings',[])))
                 pid=await enqueue(prompt,run['prepared'].get('workflow',{}),run['client_id'],run['owner_id']);update(run,prompt_id=pid)
-                await wait_job(pid);record=store.latest_output(run['project_id'],sid)
+                if not await wait_owned(run,pid,sid):continue
+                record=store.latest_output(run['project_id'],sid)
                 if record:
                     # Old files without provenance get a reliable base label only
                     # when their full first-pass fingerprint is verified.
@@ -278,6 +337,11 @@ async def execute(run):
     except Exception as error:update(run,status='failed',active_shot_id=None,message=str(error),error=str(error))
     finally:stop_diagnostics()
 async def start(body):
+    from .execution_state import lease
+    validate(body['plan'])
+    with lease(body['plan']):return await _start(body)
+
+async def _start(body):
     import folder_paths
     plan=copy.deepcopy(body['plan']);validate(plan);owner=str(body['owner_id']);prepared=copy.deepcopy(body['prepared']);scope=body.get('scope','all')
     if scope not in ('all','one','process','selected'):raise ValueError('不支持的生成范围')

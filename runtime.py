@@ -268,6 +268,12 @@ def current_shot(plan,shot_id):
     from .continuity import MODES,options
     head=options(plan,shot)['context_frames'] if shot['continuity']['mode'] in MODES else 0
     frames=requested+head
+    if shot['continuity']['mode'] in ('motion_guide','previous_latent'):
+        # The exact prefix phase is known when the previous cache is read.
+        # Budget its maximum visible head; do not append a blanket extra chunk.
+        frames=requested+max(22,head)+16
+    if any(s.get('input_mode','reference')!='keyframes' and s.get('continuity',{}).get('mode') in ('motion_guide','previous_latent') and s.get('continuity',{}).get('source_shot')==shot_id for s in plan['shots']):
+        frames=max(frames,22+17*(frames//17))
     frames+=(5-frames)%17
     return shot,frames,head
 
@@ -309,6 +315,11 @@ class Star7DirectorConditioning:
         shot,frames,head=current_shot(director_plan,shot_id)
         from .continuity import check_dependency
         processing=director_plan.get('runtime',{}).get('scope')=='process' and Star7DirectorBaseCache().find(director_plan,shot_id,prompt)[0] is not None
+        if processing:
+            row,_=Star7DirectorBaseCache().find(director_plan,shot_id,prompt)
+            shape=Storage(data_root()).latent_video_shape(director_plan['id'],shot_id,'base',row['version'])
+            from .vendor.aimixer.h3_motion_context import pixel_frames_for_latent_t
+            frames=pixel_frames_for_latent_t(shape[2])
         if not processing:check_dependency(director_plan,shot_id,prompt)
         settings=director_plan.get('settings',{})
         kwargs={}
@@ -366,6 +377,10 @@ class Star7DirectorConditioning:
                 if index is not None:context['identity_reference']=kwargs['ref_images']['ref_image_'+str(index)];break
         from .continuity import MODES,apply
         if mode in MODES and not processing:positive,latent,_=apply(director_plan,shot,positive,latent,video_vae,audio_vae,prompt)
+        context['positive']=positive
+        from .handoff import prepare_refinement,restore_prefix
+        context['star7_motion_refinement']=lambda output,conditioning:prepare_refinement(output,conditioning,director_plan,shot_id,prompt)
+        context['star7_motion_restore']=restore_prefix
         Storage(data_root()).save_project(director_plan)
         identifier(shot_id)
         original=next(s for s in director_plan['shots'] if s['id']==shot_id)
@@ -388,13 +403,15 @@ class Star7DirectorConditioning:
 
 class Star7DirectorTrim:
     @classmethod
-    def INPUT_TYPES(cls):return {'required':{'images':('IMAGE',),'audio':('AUDIO',),'director_plan':('STAR7_DIRECTOR_PLAN',),'shot_id':('STRING',{'default':'shot_001'})}}
+    def INPUT_TYPES(cls):return {'required':{'images':('IMAGE',),'audio':('AUDIO',),'director_plan':('STAR7_DIRECTOR_PLAN',),'shot_id':('STRING',{'default':'shot_001'})},'optional':{'handoff_latent':('LATENT',)}}
     RETURN_TYPES=('IMAGE','AUDIO','INT')
     RETURN_NAMES=('交付画面','交付音频','交付帧数')
     FUNCTION='trim'
     CATEGORY='Star7/导演台'
-    def trim(self,images,audio,director_plan,shot_id):
+    def trim(self,images,audio,director_plan,shot_id,handoff_latent=None):
         _,_,head=current_shot(director_plan,shot_id)
+        from .handoff import EXPORT
+        if handoff_latent is not None:head=int(handoff_latent.get(EXPORT,{}).get('trim_frames',head))
         if len(images)<=head:raise ValueError('生成视频短于连续性参考头')
         shot=compile_shot(director_plan,shot_id);requested=max(1,round(shot['duration']*24))
         if shot.get('keyframes',{}).get('last') and len(images)>requested:
@@ -410,12 +427,12 @@ class Star7DirectorTrim:
 
 class Star7DirectorComplete:
     @classmethod
-    def INPUT_TYPES(cls):return {'required':{'filenames':('STAR7_DIRECTOR_VIDEO',),'director_plan':('STAR7_DIRECTOR_PLAN',),'shot_id':('STRING',{'default':'shot_001'}),'frame_count':('INT',)},'hidden':{'prompt':'PROMPT'}}
+    def INPUT_TYPES(cls):return {'required':{'filenames':('STAR7_DIRECTOR_VIDEO',),'director_plan':('STAR7_DIRECTOR_PLAN',),'shot_id':('STRING',{'default':'shot_001'}),'frame_count':('INT',)},'optional':{'handoff_latent':('LATENT',)},'hidden':{'prompt':'PROMPT'}}
     RETURN_TYPES=('STRING',)
     FUNCTION='finish'
     OUTPUT_NODE=True
     CATEGORY='Star7/导演台'
-    def finish(self,filenames,director_plan,shot_id,frame_count,prompt=None):
+    def finish(self,filenames,director_plan,shot_id,frame_count,prompt=None,handoff_latent=None):
         paths=filenames[1]
         path=next((p for p in reversed(paths) if str(p).lower().endswith(('.mp4','.webm','.mkv'))),None)
         if path is None or not Path(path).is_file():raise ValueError('没有找到本镜头输出视频')
@@ -423,7 +440,14 @@ class Star7DirectorComplete:
         store=Storage(data_root());base,_=Star7DirectorBaseCache().find(director_plan,shot_id,prompt);original=next(s for s in director_plan['shots'] if s['id']==shot_id)
         from .parameter_state import encode
         previous=store.latest_output(director_plan['id'],shot_id)
-        store.record_output(director_plan['id'],shot_id,fingerprint,str(path),frame_count,post=original.get('post',{}),base_version=base['version'] if base else None,parameter_fingerprint=encode(director_plan,shot_id,previous))
+        handoff_version=None
+        if handoff_latent is not None:
+            from .handoff import EXPORT,KEY
+            snapshot={k:handoff_latent[k] for k in ('samples',KEY,'star7_face_latent_overlays') if k in handoff_latent}
+            snapshot[EXPORT]={'trim_frames':int(handoff_latent.get(EXPORT,{}).get('trim_frames',current_shot(director_plan,shot_id)[2])),'frame_count':int(frame_count),'base_version':base['version'] if base else None}
+            handoff_version=store.save_latent(director_plan['id'],shot_id,'final',fingerprint,snapshot)
+            event('handoff_cache_saved',project=director_plan['id'],shot=shot_id,version=handoff_version)
+        store.record_output(director_plan['id'],shot_id,fingerprint,str(path),frame_count,post=original.get('post',{}),base_version=base['version'] if base else None,parameter_fingerprint=encode(director_plan,shot_id,previous),handoff_version=handoff_version)
         from .batch_runner import release_after_clip
         release_after_clip(director_plan,shot_id)
         return ('镜头已完成：'+shot_id,)

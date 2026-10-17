@@ -239,6 +239,10 @@
       "director_plan": [
         "600",
         0
+      ],
+      "handoff_latent": [
+        "395",
+        0
       ]
     }
   },
@@ -260,6 +264,10 @@
       "frame_count": [
         "603",
         2
+      ],
+      "handoff_latent": [
+        "395",
+        0
       ]
     }
   },

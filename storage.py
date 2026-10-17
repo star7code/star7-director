@@ -24,7 +24,7 @@ class Storage:
         db.execute("CREATE TABLE IF NOT EXISTS stages (project TEXT, shot TEXT, stage TEXT, version TEXT, fingerprint TEXT, artifact TEXT, PRIMARY KEY(project,shot,stage,version))")
         db.execute("CREATE TABLE IF NOT EXISTS outputs (project TEXT,shot TEXT,fingerprint TEXT,path TEXT,frame_count INTEGER,created INTEGER DEFAULT (unixepoch()),PRIMARY KEY(project,shot,fingerprint))")
         columns={r[1] for r in db.execute('PRAGMA table_info(outputs)')}
-        for name in ('post_json','base_version','parameter_fingerprint'):
+        for name in ('post_json','base_version','parameter_fingerprint','handoff_version'):
             if name not in columns:db.execute('ALTER TABLE outputs ADD COLUMN '+name+' TEXT')
         db.execute('CREATE TABLE IF NOT EXISTS base_aliases (project TEXT,shot TEXT,version TEXT,fingerprint TEXT,PRIMARY KEY(project,shot,version,fingerprint))')
         db.execute('CREATE TABLE IF NOT EXISTS retired_base_versions (project TEXT,shot TEXT,version TEXT,PRIMARY KEY(project,shot))')
@@ -168,6 +168,32 @@ class Storage:
                 if kind=='list': return values
                 raise ValueError('Unknown cache tree type')
             return unpack(json.loads(f.metadata()['director_tree']))
+    def latent_video_shape(self,project,shot,stage,version):
+        """Read the cached AV shape without loading tensor payloads into memory."""
+        from safetensors import safe_open
+        with self.db(project,create=False) as db:
+            row=db.execute('SELECT artifact FROM stages WHERE project=? AND shot=? AND stage=? AND version=?',(identifier(project),identifier(shot),stage,identifier(version))).fetchone()
+        if row is None:raise ValueError('Checkpoint not found')
+        path=(self.root/row[0]).resolve()
+        if not path.is_relative_to(self.root.resolve()):raise ValueError('Invalid checkpoint path')
+        with safe_open(str(path),framework='pt',device='cpu') as f:
+            tree=json.loads(f.metadata()['director_tree']);video=tree['items']['samples']['items'][0]
+            return tuple(f.get_slice(video['name']).get_shape())
+    def latent_info(self,project,shot,stage,version):
+        """Read scalar provenance and tensor dimensions, without loading tensors."""
+        from safetensors import safe_open
+        with self.db(project,create=False) as db:
+            row=db.execute('SELECT artifact FROM stages WHERE project=? AND shot=? AND stage=? AND version=?',(identifier(project),identifier(shot),stage,identifier(version))).fetchone()
+        if row is None:raise ValueError('Checkpoint not found')
+        path=(self.root/row[0]).resolve()
+        if not path.is_relative_to(self.root.resolve()):raise ValueError('Invalid checkpoint path')
+        with safe_open(str(path),framework='pt',device='cpu') as f:
+            def read(node):
+                if node['type']=='scalar':return node['value']
+                if node['type']=='tensor':return {'shape':tuple(f.get_slice(node['name']).get_shape())}
+                if node['type']=='dict':return {k:read(v) for k,v in node['items'].items()}
+                return [read(v) for v in node['items']]
+            return read(json.loads(f.metadata()['director_tree']))
     def stages(self,project):
         with self.db(project,create=False) as db:
             rows=db.execute('SELECT shot,stage,version,fingerprint,artifact FROM stages WHERE project=? ORDER BY rowid',(identifier(project),)).fetchall()
@@ -180,15 +206,15 @@ class Storage:
     def base_alias_matches(self,project,shot,version,fingerprint):
         with self.db(project,create=False) as db:return db.execute('SELECT 1 FROM base_aliases WHERE project=? AND shot=? AND version=? AND fingerprint=?',(project,shot,version,fingerprint)).fetchone() is not None
     def output_history(self,project,shot,limit=4):
-        with self.db(project,create=False) as db:rows=db.execute('SELECT fingerprint,path,frame_count,post_json,base_version,parameter_fingerprint FROM outputs WHERE project=? AND shot=? ORDER BY created DESC,rowid DESC LIMIT ?',(project,shot,limit)).fetchall()
-        return [{'fingerprint':r[0],'path':r[1],'frame_count':r[2],'post':json.loads(r[3]) if r[3] else None,'base_version':r[4],'parameter_fingerprint':r[5]} for r in rows]
-    def record_output(self,project,shot,fingerprint,path,frame_count,post=None,base_version=None,parameter_fingerprint=None):
+        with self.db(project,create=False) as db:rows=db.execute('SELECT fingerprint,path,frame_count,post_json,base_version,parameter_fingerprint,handoff_version FROM outputs WHERE project=? AND shot=? ORDER BY created DESC,rowid DESC LIMIT ?',(project,shot,limit)).fetchall()
+        return [{'fingerprint':r[0],'path':r[1],'frame_count':r[2],'post':json.loads(r[3]) if r[3] else None,'base_version':r[4],'parameter_fingerprint':r[5],'handoff_version':r[6]} for r in rows]
+    def record_output(self,project,shot,fingerprint,path,frame_count,post=None,base_version=None,parameter_fingerprint=None,handoff_version=None):
         identifier(project);identifier(shot)
-        with self.db(project) as db:db.execute('INSERT OR REPLACE INTO outputs(project,shot,fingerprint,path,frame_count,post_json,base_version,parameter_fingerprint) VALUES (?,?,?,?,?,?,?,?)',(project,shot,fingerprint,path,frame_count,json.dumps(post) if post is not None else None,base_version,parameter_fingerprint))
+        with self.db(project) as db:db.execute('INSERT OR REPLACE INTO outputs(project,shot,fingerprint,path,frame_count,post_json,base_version,parameter_fingerprint,handoff_version) VALUES (?,?,?,?,?,?,?,?,?)',(project,shot,fingerprint,path,frame_count,json.dumps(post) if post is not None else None,base_version,parameter_fingerprint,handoff_version))
     def latest_output(self,project,shot):
-        with self.db(project,create=False) as db:row=db.execute('SELECT fingerprint,path,frame_count,post_json,base_version,parameter_fingerprint FROM outputs WHERE project=? AND shot=? ORDER BY created DESC,rowid DESC LIMIT 1',(identifier(project),identifier(shot))).fetchone()
+        with self.db(project,create=False) as db:row=db.execute('SELECT fingerprint,path,frame_count,post_json,base_version,parameter_fingerprint,handoff_version FROM outputs WHERE project=? AND shot=? ORDER BY created DESC,rowid DESC LIMIT 1',(identifier(project),identifier(shot))).fetchone()
         if not row:return None
-        return {'fingerprint':row[0],'path':row[1],'frame_count':row[2],'post':json.loads(row[3]) if row[3] else None,'base_version':row[4],'parameter_fingerprint':row[5]}
+        return {'fingerprint':row[0],'path':row[1],'frame_count':row[2],'post':json.loads(row[3]) if row[3] else None,'base_version':row[4],'parameter_fingerprint':row[5],'handoff_version':row[6]}
     def record_film(self,project,path):
         identifier(project);path=Path(path)
         with self.db(project) as db:db.execute('INSERT OR REPLACE INTO films VALUES (?,?,?)',(project,path.name,str(path)))

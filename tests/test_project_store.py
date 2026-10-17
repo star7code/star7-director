@@ -19,7 +19,7 @@ class Tests(unittest.TestCase):
    self.assertEqual(fp,rt.run_fingerprint(copyplan,'a'));self.assertTrue(rt.output_matches(copyplan,'a',{},db.latest_output(copyplan['id'],'a')));self.assertEqual(rt.Star7DirectorBaseCache().find(copyplan,'a',{})[0]['version'],version)
    self.assertEqual(db.latest_output(copyplan['id'],'a')['path'],str(video));self.assertFalse(list(store.folder(copyplan['id']).rglob('*.mp4')))
    changed=store.rename(copyplan['id'],'Renamed');self.assertEqual(changed['plan']['title'],'Renamed');self.assertEqual(len(store.listing()),2)
-   caches=importlib.import_module(pkg.__name__+'.cache_management');caches.clear(root,copyplan['id'],'checkpoints');self.assertEqual(db.stages(copyplan['id']),[]);self.assertTrue(db.stages('source'));self.assertEqual(video.read_bytes(),b'finished-video')
+   caches=importlib.import_module(pkg.__name__+'.cache_management');caches.clear(root,'source','selected_checkpoints',project_ids=[copyplan['id']]);self.assertEqual(db.stages(copyplan['id']),[]);self.assertTrue(db.stages('source'));self.assertEqual(video.read_bytes(),b'finished-video')
    store.delete(copyplan['id']);self.assertEqual(len(store.listing()),1);self.assertEqual(video.read_bytes(),b'finished-video');self.assertTrue(db.latest_output('source','a'));self.assertTrue(rt.Star7DirectorBaseCache().find(managed,'a',{})[0]);self.assertTrue(list((root/'project-trash').iterdir()))
  def test_new_project_is_empty_and_has_unique_id(self):
   with tempfile.TemporaryDirectory(dir=ROOT/'tests') as tmp,patch.object(store,'data_root',return_value=Path(tmp)):

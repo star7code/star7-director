@@ -29,8 +29,14 @@ def _av_parts(av_latent):
 
 def _frames_are_finite(frames, chunk_size: int = 8):
     """Avoid allocating one UHD-sized boolean tensor for the safety check."""
+    import comfy.model_management
+    cpu_numpy=frames.device.type=='cpu' and frames.dtype in (torch.float16,torch.float32,torch.float64)
+    if cpu_numpy:import numpy as np
     for start in range(0, int(frames.shape[0]), int(chunk_size)):
-        if not torch.isfinite(frames[start:start + chunk_size]).all():
+        comfy.model_management.throw_exception_if_processing_interrupted()
+        part=frames[start:start + chunk_size]
+        valid=np.isfinite(part.detach().numpy()).all() if cpu_numpy else torch.isfinite(part).all()
+        if not valid:
             return False
     return True
 
@@ -113,12 +119,19 @@ class MiniMaxH3ChunkedDecodeStar7:
             width, height, route,
             "" if estimated_mib is None else f" | final frames≈{estimated_mib:.0f} MiB RAM",
         )
+        stage_started=time.perf_counter()
         frames = _decode_video_frames(video_vae, video)
+        video_seconds=time.perf_counter()-stage_started
+        _LOG.info('Star7 H3 decode | video VAE completed | %.2fs | validating frames',video_seconds)
+        stage_started=time.perf_counter()
         if frames.ndim != 4 or not _frames_are_finite(frames):
             raise RuntimeError(
                 f"Star7 H3 video VAE returned invalid frames with shape {tuple(frames.shape)}"
             )
+        validation_seconds=time.perf_counter()-stage_started
+        stage_started=time.perf_counter()
         frames, face_stitches = _stitch_deferred_faces(frames, av_latent, video_vae)
+        stitch_seconds=time.perf_counter()-stage_started
         if face_stitches:
             _LOG.info(
                 "Star7 H3 decode | final RGB face stitch completed | faces=%d",
@@ -126,7 +139,9 @@ class MiniMaxH3ChunkedDecodeStar7:
             )
         height, width = int(frames.shape[1]), int(frames.shape[2])
         estimated_mib = frames.numel() * frames.element_size() / (1024 ** 2)
+        stage_started=time.perf_counter()
         decoded_audio = vae_decode_audio(audio_vae, {"samples": audio})
+        audio_seconds=time.perf_counter()-stage_started
         elapsed = time.perf_counter() - started
         report = (
             f"Star7 H3 decode completed | {width}x{height} frames={int(frames.shape[0])} | "
@@ -135,6 +150,7 @@ class MiniMaxH3ChunkedDecodeStar7:
         if estimated_mib is not None:
             report += f" | final IMAGE tensor≈{estimated_mib:.0f} MiB RAM"
         _LOG.info(report)
+        _LOG.info('Star7 H3 decode timing | video=%.2fs validation=%.2fs face=%.2fs audio=%.2fs',video_seconds,validation_seconds,stitch_seconds,audio_seconds)
         return frames, decoded_audio, report
 
 

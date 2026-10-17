@@ -45,6 +45,12 @@ async def validate_generation(plan,prepared,scope='all',shot_id=None):
         will_generate=(scope=='all' and (not usable or not parameter_matches(plan,shot['id'],prompt,record)) or scope=='selected' and shot['id'] in shot_id)
         frames[shot['id']]=max(1,round(shot['duration']*24)) if will_generate else record['frame_count'] if usable else None
     from .continuity import MODES,options
+    from .handoff import check_request
+    future=set()
+    if scope in ('all','selected'):
+        for s in selected:
+            record=store.latest_output(plan['id'],s['id'])
+            if scope=='selected' or not record or not parameter_matches(plan,s['id'],prompt,record):future.add(s['id'])
     for shot in selected:
         cfg=shot['continuity'];mode=cfg['mode']
         from .core import dependency_source
@@ -55,6 +61,8 @@ async def validate_generation(plan,prepared,scope='all',shot_id=None):
         if count is None:raise ValueError(shot['id']+'：前段没有可用视频 '+cfg.get('source_shot',''))
         if mode=='selected_frame' and cfg['frame']>=count:raise ValueError(shot['id']+'：参考帧 '+str(cfg['frame'])+' 超出前段范围 0–'+str(count-1))
         if mode in MODES and count<options(plan,shot)['context_frames']:raise ValueError(shot['id']+'：前段长度不足所选上下文帧数，请降低上下文或增加前段秒数')
+        if mode in ('motion_guide','previous_latent') and cfg.get('source_shot') not in future:
+            check_request(plan,shot['id'],prompt,processing=scope=='process')
     # Validate each distinct post-processing branch before spending GPU time.
     # Future predecessors may not exist yet; their planned lengths were checked above.
     from .desk import internal_graph,validate_execution_plan

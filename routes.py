@@ -143,6 +143,12 @@ async def project_status(request):
             except (ValueError,TypeError,KeyError,OSError) as error:problem=problem or str(error)
             reason='缓存已清除，请重新生成当前镜头以建立缓存，再执行二采／人脸修复' if not base and store.cache_was_cleared(plan['id'],shot['id']) else '没有与当前参数匹配的基础缓存，请先生成当前镜头'
             result[shot['id']]={'complete':valid,'batch_complete':batch_valid,'stale':has_output and not batch_valid,'parameters_changed':has_output and not valid,'preserves_post':has_output and batch_valid and not valid,'frames':record['frame_count'] if record else None,'has_output':has_output,'base_available':base is not None,'base_reason':problem or ('' if base else reason)}
+            process_problem=problem or ('' if base else reason)
+            if base and shot.get('post',{}).get('hd'):
+                from .handoff import check_request
+                try:check_request(plan,shot['id'],pipeline,processing=True,store=store)
+                except (ValueError,TypeError,KeyError,OSError) as error:process_problem=str(error)
+            result[shot['id']].update(process_available=base is not None and not process_problem,process_reason=process_problem)
             result[shot['id']].update(changes)
             if problem:result[shot['id']]['resource_problem']=problem
         return web.json_response(result)
@@ -399,12 +405,8 @@ async def clear_cache(request):
     import asyncio
     from .cache_management import clear
     try:
-        queue=PromptServer.instance.prompt_queue
-        running,pending=queue.get_current_queue()
-        from .batch_runner import active
-        if running or pending or active():raise ValueError('任务运行中，请完成后再清理缓存')
         body=await request.json()
-        return web.json_response(await asyncio.to_thread(clear,DATA,request.match_info['project'],body.get('kind'),body.get('package_id'),body.get('active_sources',[]),body.get('project_ids')))
+        return web.json_response(await asyncio.to_thread(clear,DATA,request.match_info['project'],body.get('kind'),body.get('package_id'),body.get('active_sources',[]),body.get('project_ids'),body.get('stages')))
     except Exception as e:return web.json_response({'error':str(e)},status=400)
 
 def video_download(path,name):
@@ -559,8 +561,10 @@ async def batch_status(request):
 
 @PromptServer.instance.routes.get('/star7/director/batch/project/{project}')
 async def project_batch(request):
-    from .batch_runner import latest
-    try:return web.json_response({'run':latest(request.match_info['project'])})
+    from .batch_runner import latest,native_queue_items
+    try:
+        project=request.match_info['project']
+        return web.json_response({'run':latest(project),'native_queue_items':native_queue_items(project)})
     except Exception as error:return web.json_response({'error':str(error)},status=400)
 
 @PromptServer.instance.routes.post('/star7/director/batch/{run_id}/control')
@@ -572,9 +576,10 @@ async def batch_control(request):
 
 @PromptServer.instance.routes.post('/star7/director/batch/{run_id}/cancel')
 async def batch_cancel(request):
-    from .batch_runner import cancel_item
+    from .batch_runner import cancel_item,cancel_native
     try:
-        body=await request.json();return web.json_response(cancel_item(request.match_info['run_id'],body['shot_id'],body.get('confirm') is True,body.get('expected')))
+        body=await request.json();rid=request.match_info['run_id'];cancel=cancel_native if rid.startswith('native:') else cancel_item
+        return web.json_response(cancel(rid,body['shot_id'],body.get('confirm') is True,body.get('expected')))
     except Exception as error:return web.json_response({'error':str(error)},status=400)
 
 @PromptServer.instance.routes.get('/star7/director/tail-image/{pid}/{sid}')

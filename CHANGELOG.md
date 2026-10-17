@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.2.6 — 2026-10-17
+
+- Use output-version-bound base/final latent caches for Motion Guide; retain native decode phase and delivery duration, pin the HD reference prefix and validate missing legacy data before sampling.
+- Fix the full-canvas model denoise mask remaining uncropped during tiled HD refinement, including shared condition wrappers and exception restoration.
+- Remove unnecessary tail-generation padding, speed up CPU finite-value checks without changing precision, and report video/validation/face/audio decode timings separately. No fixed GPU speedup or universal seam-quality claim.
+- Rebuild the cache-management layout with per-stage capacity/selection; protect the current project, queued/running projects and imports while preserving materials and finished videos.
+- Allow targeted cancellation of active shots, retaining completed first-pass outputs and continuing other executable tasks.
+- Synchronize native Run with the selected shot, task state, previews, results and seed updates; reject stale serialized execution scopes.
+- Keep exactly two public nodes, the author workflow, dependencies and encoding defaults unchanged. Exclude all local projects, media, models, caches and diagnostic artifacts.
+
 ## 0.2.5 — 2026-10-16
 
 - Explicitly include the author workflow directory in Comfy Registry packages, preserving the original Chinese JSON filename and unchanged workflow content.

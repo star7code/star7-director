@@ -36,7 +36,7 @@ class Tests(unittest.TestCase):
    store.record_output('batch','s1',rt.run_fingerprint(plan,'s1'),str(movie),24)
    old=rt.run_fingerprint(plan,'s2',legacy_dependencies=True);store.record_output('batch','s2',old,str(s2),24)
    stable=rt.run_fingerprint(plan,'s2');record=store.latest_output('batch','s2');self.assertTrue(rt.output_matches(plan,'s2',{},record))
-   cache.clear(root,'batch','checkpoints');self.assertFalse(latent.exists());self.assertEqual(store.stages('batch'),[]);self.assertEqual(movie.read_bytes(),b'finished-video');self.assertEqual(s2.read_bytes(),b'finished-video-2')
+   cache.clear(root,'different','selected_checkpoints',project_ids=['batch']);self.assertFalse(latent.exists());self.assertEqual(store.stages('batch'),[]);self.assertEqual(movie.read_bytes(),b'finished-video');self.assertEqual(s2.read_bytes(),b'finished-video-2')
    self.assertEqual(stable,rt.run_fingerprint(plan,'s2'));self.assertTrue(rt.output_matches(plan,'s2',{},record))
    plan['shots'][0]['prompt']='different garden';self.assertFalse(rt.output_matches(plan,'s2',{},record))
  def test_own_parameters_ignore_upstream_changes_but_detect_local_edits(self):

@@ -176,9 +176,16 @@ class Star7DirectorDesk:
             return Star7DirectorVideoExport().save(document['export_json'])
         if any(value is None for value in (model,clip,video_vae,audio_vae)):raise ValueError('生成需要连接模型、文本编码器、视频 VAE 和音频 VAE；导出已有视频不需要这些输入')
         plan=merge_library(document,asset_library)
+        from .native_execution import execution
+        with execution(plan,prompt,unique_id) as request:
+            return self.generate_plan(request,model,clip,video_vae,audio_vae,unique_id,prompt)
+
+    def generate_plan(self,plan,model,clip,video_vae,audio_vae,unique_id,prompt):
         compile_plan(plan)
         shot_id=plan.get('runtime',{}).get('active_shot_id') or (plan['shots'][0]['id'] if plan['shots'] else None)
         if shot_id is None:raise ValueError('请先添加镜头')
+        from .handoff import check_request
+        check_request(plan,shot_id,prompt,processing=plan.get('runtime',{}).get('scope')=='process')
         from .continuity import check_dependency
         if plan.get('runtime',{}).get('scope')!='process':check_dependency(plan,shot_id,prompt)
         if plan.get('runtime',{}).get('scope')=='process':

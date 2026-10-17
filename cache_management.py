@@ -14,7 +14,9 @@ def size(path):
 def stale_packages(root):
     folder=Path(root)/'packages';cutoff=time.time()-86400
     if not folder.is_dir():return []
-    return [p for p in folder.iterdir() if not p.is_symlink() and p.resolve().is_relative_to(folder.resolve()) and p.stat().st_mtime<cutoff and (p.suffix in ('.upload','.zip') or p.name.startswith(('stage_','library_stage_')))]
+    from .package_index import read
+    importing={(Path(root)/name).resolve() for record in read(root) if record.get('state')=='importing' for name in record.get('temporary',[])}
+    return [p for p in folder.iterdir() if p.resolve() not in importing and not p.is_symlink() and p.resolve().is_relative_to(folder.resolve()) and p.stat().st_mtime<cutoff and (p.suffix in ('.upload','.zip') or p.name.startswith(('stage_','library_stage_')))]
 
 def referenced_sources(value):
     if isinstance(value,dict):
@@ -28,6 +30,8 @@ def protected_sources(root,active_sources=()):
     import json
     if not isinstance(active_sources,(list,tuple)) or any(not isinstance(s,str) for s in active_sources):raise ValueError('素材引用列表无效')
     protected=set(active_sources)
+    from .execution_state import live_plans
+    for plan in live_plans():protected.update(referenced_sources(plan))
     for path in [*Path(root).glob('*.json'),*Path(root).glob('projects/*/project.json'),*Path(root).glob('projects/*/state.json')]:
         if path.name=='package-index.json':continue
         try:protected.update(referenced_sources(json.loads(path.read_text(encoding='utf-8'))))
@@ -54,33 +58,42 @@ def package_groups(root,active_sources=()):
 
 def stats(root,project,active_sources=()):
     root=Path(root);project=identifier(project);store=Storage(root);checkpoints=0
+    from .execution_state import protected_projects
+    protected=protected_projects(project)
     for row in store.stages(project):
         path=(root/row['artifact']).resolve()
         if (path.is_relative_to((root/project).resolve()) or path.is_relative_to((root/'projects'/project/'cache').resolve())) and path.suffix=='.safetensors':checkpoints+=size(path)
     projects=[]
     pids=store.projects()
     for pid in pids:
-        identifier(pid);amount=0
+        identifier(pid);amount=0;stage_bytes={}
         for row in store.stages(pid):
             path=(root/row['artifact']).resolve()
-            if (path.is_relative_to(root.resolve()/pid) or path.is_relative_to((root/'projects'/pid/'cache').resolve())) and path.suffix=='.safetensors':amount+=size(path)
+            if (path.is_relative_to(root.resolve()/pid) or path.is_relative_to((root/'projects'/pid/'cache').resolve())) and path.suffix=='.safetensors':
+                count=size(path);amount+=count;stage_bytes[row['stage']]=stage_bytes.get(row['stage'],0)+count
         if not amount:continue
         title=pid
         try:
             import json
             value=store.load_project(pid);title=value.get('title') or pid
         except (OSError,ValueError):pass
-        projects.append({'id':pid,'name':title,'bytes':amount,'current':pid==project})
-    return {'temporary_bytes':sum(size(p) for p in stale_packages(root)),'checkpoint_bytes':checkpoints,'other_checkpoint_bytes':sum(p['bytes'] for p in projects if not p['current']),'projects':projects,'material_bytes':size(root/'media'),'packages':[{k:v for k,v in p.items() if k not in ('paths','materials')} for p in package_groups(root,active_sources)]}
+        projects.append({'id':pid,'name':title,'bytes':amount,'stage_bytes':stage_bytes,'current':pid==project,'protected':pid in protected,'protection_reason':'当前项目' if pid==project else '生成或排队中' if pid in protected else ''})
+    return {'cache_stage_filter':True,'temporary_bytes':sum(size(p) for p in stale_packages(root)),'checkpoint_bytes':checkpoints,'other_checkpoint_bytes':sum(p['bytes'] for p in projects if not p['current']),'projects':projects,'material_bytes':size(root/'media'),'packages':[{k:v for k,v in p.items() if k not in ('paths','materials')} for p in package_groups(root,active_sources)]}
 
-def clear(root,project,kind,pack_id=None,active_sources=(),project_ids=None):
+def clear(root,project,kind,pack_id=None,active_sources=(),project_ids=None,stages=None):
+    from .execution_state import LOCK
+    with LOCK:return _clear(root,project,kind,pack_id,active_sources,project_ids,stages)
+
+def _clear(root,project,kind,pack_id=None,active_sources=(),project_ids=None,stages=None):
     root=Path(root).resolve();project=identifier(project);freed=0
+    if stages is not None and (not isinstance(stages,list) or not stages or any(not isinstance(s,str) or s not in STAGES for s in stages)):raise ValueError('缓存类型无效，已停止清理')
+    selected_stages=STAGES if stages is None else set(stages)
     if kind in ('package','packages'):
         groups=package_groups(root,active_sources)
         if kind=='package':
             groups=[g for g in groups if g['id']==pack_id]
             if not groups:raise ValueError('素材包记录不存在')
-            if groups[0]['state']=='ready' and groups[0]['in_use']:raise ValueError('素材包正在被素材库、工作流或已保存项目使用，不能删除')
+            if groups[0]['in_use']:raise ValueError('素材包正在导入，或被素材库、工作流、已保存项目使用，不能删除')
         else:groups=[g for g in groups if g['state']=='ready' and not g['in_use']]
         from .package_index import update
         for group in groups:
@@ -104,11 +117,16 @@ def clear(root,project,kind,pack_id=None,active_sources=(),project_ids=None):
             else:path.unlink(missing_ok=True)
     elif kind in ('checkpoints','other_checkpoints','selected_checkpoints'):
         store=Storage(root)
+        from .execution_state import protected_projects
+        protected=protected_projects(project)
+        if kind=='checkpoints':raise ValueError('当前项目的缓存受保护；请切换到其他项目后再清理此项目')
         pids=[project] if kind=='checkpoints' else [pid for pid in store.projects() if pid!=project]
+        pids=[pid for pid in pids if pid not in protected]
         if kind=='selected_checkpoints':
             if not isinstance(project_ids,list) or not project_ids or len(project_ids)>1000:raise ValueError('请先选择需要删除缓存的项目')
             pids=list(dict.fromkeys(identifier(pid) for pid in project_ids))
             if set(pids)-set(store.projects()):raise ValueError('所选项目不存在，已停止清理')
+            if set(pids)&protected:raise ValueError('所选项目包含当前项目或生成／排队中的项目，已停止清理')
             # Validate every selected project's paths before deleting any file.
             for pid in pids:
                 for row in store.stages(pid):
@@ -119,6 +137,7 @@ def clear(root,project,kind,pack_id=None,active_sources=(),project_ids=None):
                 rows=db.execute('SELECT project,shot,stage,version,artifact FROM stages WHERE project=? ORDER BY rowid',(project_id,)).fetchall()
                 targets=[]
                 for pid,sid,stage,version,artifact in rows:
+                    if stage not in selected_stages:continue
                     identifier(pid);identifier(sid)
                     path=(root/artifact).resolve()
                     owned=path.is_relative_to(root/pid) or path.is_relative_to(root/'projects'/pid/'cache')
