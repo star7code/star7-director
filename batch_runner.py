@@ -278,7 +278,7 @@ async def execute(run):
                 if not predecessor or not Path(predecessor['path']).is_file():reason='前置镜头没有可用视频：'+source
                 else:
                     current=next(s for s in run['plan']['shots'] if s['id']==sid);cfg=current.get('continuity',{})
-                    mode=cfg.get('mode') if current.get('input_mode')!='keyframes' else 'independent';count=predecessor['frame_count']
+                    mode=('motion_guide' if current.get('keyframe_motion') else 'independent') if current.get('input_mode')=='keyframes' else cfg.get('mode');count=predecessor['frame_count']
                     if mode=='selected_frame' and cfg.get('frame',0)>=count:reason='前段视频不包含所选参考帧：'+source
                     if mode in ('previous_latent','motion_guide','motion_redraw') and count<cfg.get('context_frames',run['plan'].get('continuity_settings',{}).get('context_frames',22)):reason='前段视频长度不足所需上下文：'+source
             if reason:

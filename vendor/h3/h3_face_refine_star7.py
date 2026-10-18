@@ -722,6 +722,7 @@ class MiniMaxH3MaterialPromptStar7(io.ComfyNode):
             MiniMaxH3ImageToVideo,
             MiniMaxH3ReferenceToVideo,
             _encode_ref_audio,
+            _resize,
         )
 
         warnings = []
@@ -835,9 +836,12 @@ class MiniMaxH3MaterialPromptStar7(io.ComfyNode):
                     positive, latent, -1, vae=video_vae, image=last_frame
                 ))[0]
         else:
+            # Native I2V stretches the first image. Fit endpoints here while
+            # retaining their original pixels in context for later HD guides.
             positive, latent = _unpack(MiniMaxH3ImageToVideo.execute(
                 clip, video_vae, conditioned_prompt, width, height, int(length),
-                first_frame=first_frame, last_frame=last_frame,
+                first_frame=_resize(first_frame[:1], width, height, "center") if first_frame is not None else None,
+                last_frame=_resize(last_frame[:1], width, height, "center") if last_frame is not None else None,
             ))[:2]
 
         if drive_audio is not None and mode in ("lock_source", "remix_source"):

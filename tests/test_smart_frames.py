@@ -9,11 +9,11 @@ class Tests(unittest.TestCase):
   return {'schema_version':'1.0','id':'smart_test','assets':[{'id':'actor','name':'小可','kind':'character','media':[{'type':'image','source':'actor.png'}],'voice_id':'voice'},{'id':'voice','name':'音色1','kind':'voice','media':[{'type':'audio','source':'voice.wav'}]}],'shots':[{'id':'a','duration':2,'seed':666,'input_mode':'keyframes','keyframes':{'first':{'source':'first.png'}},'continuity':{'mode':'independent'},'prompt':'subject_definitions:\n<Subject 1> is 小可, using @{actor}.\nsummary:\nSpeak from @{首帧} toward @{尾帧}. Ignore @{尾帧参考}.\nretention_analysis:\nKeep identity.\ndetailed_description:\nSpeak Mandarin: <d>你好</d>.\noverall_soundscape:\nRoom tone.\nnon_diegetic_music:\nPiano.'}]}
  def test_mode_priority_audio_binding_and_missing_frame_are_nonblocking(self):
   p=self.plan();p['prompt_options']={'no_subtitles':True,'no_background_music':True};c=core.compile_shot(p,'a')
-  self.assertEqual(c['media']['image'],[]);self.assertEqual(len(c['media']['audio']),1)
-  self.assertIn('@{actor} <Audio 1>',c['prompt']);self.assertNotIn('voice timbre for',c['prompt']);self.assertIn('<Audio 1>',c['prompt']);self.assertIn('@{actor}',c['prompt'])
-  self.assertIn('the supplied first frame',c['prompt']);self.assertIn('@{尾帧}',c['prompt']);self.assertIn('@{尾帧参考}',c['prompt']);self.assertNotIn('<Picture',c['prompt'])
+  self.assertEqual(len(c['media']['image']),2);self.assertEqual(len(c['media']['audio']),1)
+  self.assertIn('<Picture 1> <Audio 1>',c['prompt']);self.assertNotIn('voice timbre for',c['prompt']);self.assertIn('<Audio 1>',c['prompt']);self.assertNotIn('@{actor}',c['prompt'])
+  self.assertIn('<Picture 2>',c['prompt']);self.assertIn('@{尾帧}',c['prompt']);self.assertIn('@{尾帧参考}',c['prompt']);self.assertIn('<Picture 1>',c['prompt'])
   self.assertTrue(c['prompt'].endswith('non_diegetic_music:\nN/A'));self.assertIn('Screen: no subtitles',c['prompt']);self.assertNotIn('Piano',c['prompt'])
-  p['shots'][0]['keyframes']['last']={'source':'last.png'};c=core.compile_shot(p,'a');self.assertIn('the supplied last frame',c['prompt']);self.assertIn('@{尾帧参考}',c['prompt'])
+  p['shots'][0]['keyframes']['last']={'source':'last.png'};c=core.compile_shot(p,'a');self.assertIn('<Picture 3>',c['prompt']);self.assertIn('@{尾帧参考}',c['prompt'])
   p['shots'][0]['input_mode']='reference';c=core.compile_shot(p,'a');self.assertEqual(len(c['media']['image']),1);self.assertEqual(c['keyframe_media'],[]);self.assertIn('@{首帧}',c['prompt'])
  def test_native_endpoints_are_sent_with_audio_but_without_visual_refs(self):
   import torch
@@ -21,9 +21,9 @@ class Tests(unittest.TestCase):
   class Material:
    @staticmethod
    def execute(model,clip,v,a,prompt,*args,**kwargs):captured.update(prompt=prompt,**kwargs);return model,[],{},None,{},None
-  with tempfile.TemporaryDirectory(dir=ROOT/'tests') as tmp,patch.object(rt,'data_root',return_value=Path(tmp)),patch.object(rt,'preflight',return_value=[]),patch.object(rt,'load_image',return_value=pixels),patch.object(rt,'load_audio',return_value={'waveform':torch.zeros(1,2,2400),'sample_rate':48000}),patch.object(rt,'registry',return_value=Material):
+  with tempfile.TemporaryDirectory(dir=ROOT/'tests') as tmp,patch.object(rt,'data_root',return_value=Path(tmp)),patch.object(rt,'preflight',return_value=[]),patch.object(rt,'load_image',return_value=pixels),patch.object(rt,'load_audio',return_value={'waveform':torch.zeros(1,2,2400),'sample_rate':48000}),patch.object(rt,'load_image',return_value=pixels),patch.object(rt,'registry',return_value=Material):
    rt.Star7DirectorConditioning().prepare(p,'a',object(),None,None,None)
-  self.assertIs(captured['first_frame'],pixels);self.assertIs(captured['last_frame'],pixels);self.assertEqual(captured['ref_images'],{});self.assertIn('ref_audio_0',captured)
+  self.assertIs(captured['first_frame'],pixels);self.assertIs(captured['last_frame'],pixels);self.assertIs(captured['ref_images']['ref_image_0'],pixels);self.assertIn('ref_audio_0',captured)
  def test_project_package_includes_endpoints_without_library_cards(self):
   packages=importlib.import_module(pkg.__name__+'.packages')
   p={'schema_version':'1.0','id':'package_frames','assets':[],'shots':[{'id':'a','duration':1,'prompt':'@{首帧}','input_mode':'keyframes','keyframes':{'first':{'source':'first.png'}}}]}
@@ -38,7 +38,7 @@ class Tests(unittest.TestCase):
   samples=audio['waveform'][0,0,:7000];crossings=((samples[:-1]<0)&(samples[1:]>=0)).sum().item();self.assertAlmostEqual(crossings/(7000/rate),200,delta=5)
  def test_deferred_previous_tail_is_not_a_missing_upload(self):
   p={'schema_version':'1.0','id':'deferred','assets':[],'shots':[{'id':'a','duration':1,'prompt':'scene'},{'id':'b','duration':1,'prompt':'@{首帧}','input_mode':'keyframes','keyframes':{'first':{'from_previous':True}}}]}
-  core.validate(p);compiled=core.compile_shot(p,'b');self.assertEqual(compiled['keyframe_media'],[]);self.assertEqual(core.dependency_source(p,'b'),'a');self.assertIn('the supplied first frame',compiled['prompt'])
+  core.validate(p);compiled=core.compile_shot(p,'b');self.assertEqual(compiled['keyframe_media'],[]);self.assertEqual(core.dependency_source(p,'b'),'a');self.assertIn('<Picture 1>',compiled['prompt'])
   packages=importlib.import_module(pkg.__name__+'.packages');self.assertEqual(packages.project_assets(p),[])
   p['shots'][1]['keyframes']['first']={'source':'uploaded.png'};self.assertIsNone(core.dependency_source(p,'b'))
  def test_deferred_frame_is_loaded_at_execution_not_during_editing(self):
@@ -48,7 +48,7 @@ class Tests(unittest.TestCase):
   class Material:
    @staticmethod
    def execute(model,clip,v,a,prompt,*args,**kwargs):captured.update(kwargs);return model,[],{},None,{},None
-  with tempfile.TemporaryDirectory(dir=ROOT/'tests') as tmp,patch.object(rt,'data_root',return_value=Path(tmp)),patch.object(rt,'preflight',return_value=[]),patch.object(rt,'postprocess_source',return_value={'path':'latest-video'}) as source,patch.object(tail,'load',return_value=pixels),patch.object(rt,'load_audio',return_value={'waveform':torch.zeros(1,2,2400),'sample_rate':48000}),patch.object(rt,'registry',return_value=Material):
+  with tempfile.TemporaryDirectory(dir=ROOT/'tests') as tmp,patch.object(rt,'data_root',return_value=Path(tmp)),patch.object(rt,'preflight',return_value=[]),patch.object(rt,'postprocess_source',return_value={'path':'latest-video'}) as source,patch.object(tail,'load',return_value=pixels),patch.object(rt,'load_audio',return_value={'waveform':torch.zeros(1,2,2400),'sample_rate':48000}),patch.object(rt,'load_image',return_value=pixels),patch.object(rt,'registry',return_value=Material):
    rt.Star7DirectorConditioning().prepare(p,'a',object(),None,None,None)
   source.assert_called_once_with(p,'previous');self.assertIs(captured['first_frame'],pixels)
  def test_reordering_changes_the_dynamic_first_frame_dependency(self):

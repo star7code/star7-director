@@ -1,7 +1,8 @@
 """Deterministic storyboard recognition; preview is non-mutating and all-or-nothing."""
 import copy,json,math,re
 from .core import validate,compile_plan,_compile_shot,MENTION
-ALIASES={'duration':('duration','duration_sec','seconds','时长','秒数'),'prompt':('prompt','提示词','镜头描述'),'name':('name','名称','镜头名称'),'mode':('mode','continuity_mode','延续模式'),'first_frame':('first_frame','首帧'),'last_frame':('last_frame','尾帧')}
+from .keyframe_timeline import reference_cards
+ALIASES={'duration':('duration','duration_sec','seconds','时长','秒数'),'prompt':('prompt','提示词','镜头描述'),'name':('name','名称','镜头名称'),'mode':('mode','continuity_mode','延续模式'),'first_frame':('first_frame','首帧'),'last_frame':('last_frame','尾帧'),'keyframes':('keyframes','关键帧')}
 def unique_object(pairs):
     out={}
     for key,value in pairs:
@@ -76,7 +77,7 @@ def recognize(plan,text,mode='append',reserved_ids=()):
             if any(not any(a<=m.start()<b for a,b in spans) for m in re.finditer('@',prompt)):raise ValueError('存在不完整的@引用，请使用完整@{素材名称}')
             def canonical(match):
                 token=mention_name(match)
-                if is_tail_reference(token,names) or token in ('__star7_first_frame__','__star7_selected_frame__'):return match[0]
+                if is_tail_reference(token,names) or token in ('__star7_first_frame__','__star7_last_frame__','__star7_selected_frame__') or token.startswith('__star7_keyframe_'):return match[0]
                 if token not in names:raise ValueError('未知素材 @'+token+'，请使用素材大纲中的引用标记')
                 return '@{'+names[token]+'}'
             prompt=MENTION.sub(canonical,prompt)
@@ -84,8 +85,9 @@ def recognize(plan,text,mode='append',reserved_ids=()):
             code=values.get('mode','R' if previous else 'I')
             if not isinstance(code,str):raise ValueError('mode只能是I（独立）、R（运动引导）或F（尾帧画面参考）')
             code=code.strip().upper()
-            frame_modes={'S':'first','E':'last','SE':'both','FIRST_FRAME':'first','LAST_FRAME':'last','FIRST_LAST_FRAMES':'both'}
+            frame_modes={'K':'timeline','KEYFRAMES':'timeline','S':'first','E':'last','SE':'both','FIRST_FRAME':'first','LAST_FRAME':'last','FIRST_LAST_FRAMES':'both'}
             if code not in ('I','R','F','INDEPENDENT','MOTION_GUIDE','MOTION_REDRAW','TAIL_REFERENCE',*frame_modes):raise ValueError('mode支持I、R、F，以及S首帧、E尾帧、SE首尾帧')
+            if 'keyframes' in values and code not in frame_modes:raise ValueError('关键帧字段需要使用 K 模式')
             if any(k in values for k in ('first_frame','last_frame')) and code not in frame_modes:raise ValueError('首尾帧字段需要使用S、E或SE模式')
             continuity={'mode':'independent'}
             if code in ('R','MOTION_GUIDE','MOTION_REDRAW','F','TAIL_REFERENCE'):
@@ -93,7 +95,7 @@ def recognize(plan,text,mode='append',reserved_ids=()):
                 continuity={'mode':'tail_reference' if code in ('F','TAIL_REFERENCE') else 'motion_redraw' if code=='MOTION_REDRAW' else 'motion_guide','source_shot':previous[-1]['id']}
             shot={'id':sid,'name':name,'duration':duration,'prompt':prompt,'seed':666,'seed_control':'increment','continuity':continuity,'post':{'hd':False,'face':False}}
             if code in frame_modes:
-                needed=('first_frame',) if frame_modes[code]=='first' else ('last_frame',) if frame_modes[code]=='last' else ('first_frame','last_frame')
+                needed=('first_frame',) if frame_modes[code]=='first' else ('last_frame',) if frame_modes[code]=='last' else tuple(k for k in ('first_frame','last_frame') if k in values) if frame_modes[code]=='timeline' else ('first_frame','last_frame')
                 if any(k in values and k not in needed for k in ('first_frame','last_frame')):raise ValueError('上传帧字段与选择的首尾帧模式不一致')
                 endpoints={}
                 for key in needed:
@@ -105,8 +107,22 @@ def recognize(plan,text,mode='append',reserved_ids=()):
                     if not images:raise ValueError(key+'未找到当前素材库中的图片：'+value)
                     endpoints['first' if key=='first_frame' else 'last']=copy.deepcopy(images[0])
                 shot.update(input_mode='keyframes',keyframes=endpoints)
+                points=values.get('keyframes',[])
+                if not isinstance(points,list):raise ValueError('keyframes 必须是关键帧列表')
+                for j,point in enumerate(points):
+                    if not isinstance(point,dict):raise ValueError('关键帧必须包含 time_seconds 和 image')
+                    seconds=point.get('time_seconds');value=point.get('image')
+                    if isinstance(seconds,bool) or not isinstance(seconds,(int,float)) or not math.isfinite(seconds) or seconds<0 or seconds>duration:raise ValueError('关键帧时间超出当前镜头时长')
+                    if not isinstance(value,str):raise ValueError('关键帧 image 需要素材名称或引用')
+                    token=value.strip();match=MENTION.search(token)
+                    if match and match[0]==token:token=mention_name(match)
+                    asset=by_id.get(names.get(token));images=[m for m in asset.get('media',[]) if m.get('type')=='image'] if asset else []
+                    if not images:raise ValueError('关键帧图片未找到：'+value)
+                    shot.setdefault('keyframe_points',[]).append({**copy.deepcopy(images[0]),'id':'kf_'+str(j+1),'time_seconds':seconds})
+                from .keyframe_timeline import require_valid
+                require_valid(shot)
             if source:
-                for key in ('seed','seed_control','post','input_mode','keyframes'):
+                for key in ('seed','seed_control','post','input_mode','keyframes','keyframe_points'):
                     if key in source:shot[key]=copy.deepcopy(source[key])
                 continuity=copy.deepcopy(source.get('continuity',{'mode':'independent'}))
                 if continuity.get('source_shot'):continuity['source_shot']=exported_ids.get(continuity['source_shot'],continuity['source_shot'])
@@ -119,7 +135,11 @@ def recognize(plan,text,mode='append',reserved_ids=()):
             missing=[field for field in fields if not re.search(r'(?mi)^\s*'+field+r'\s*:',prompt)]
             if re.search(r'<Scene\s+\d+>',prompt,re.I):warnings.append(f'镜头{i}使用了Scene标签；H3场景应定义为<Subject N>')
             if missing:warnings.append(f'镜头{i}缺少H3标准字段：'+', '.join(missing)+'；建议让AI按新版素材大纲重写')
-            row.update(valid=True,prompt=prompt,model_prompt=compiled['prompt'],continuity=continuity,input_mode=shot.get('input_mode','reference'),keyframes=shot.get('keyframes',{}),references=[{'id':aid,'name':by_id[aid]['name']} for aid in compiled['labels']],media_counts={kind:len(items)+(len(shot.get('keyframes',{})) if kind=='image' else 0)+(1 if kind=='image' and compiled.get('continuity_reference') else 0) for kind,items in compiled['media'].items()},**({'continuity_reference':compiled['continuity_reference']} if compiled.get('continuity_reference') else {}))
+            guide_sources={m['source'] for m in compiled.get('keyframe_media',[])}
+            deferred=bool(shot.get('keyframes',{}).get('first',{}).get('from_previous'))
+            if deferred:guide_sources.add('__star7_previous_tail__')
+            image_count=len(compiled.get('keyframe_media',[]))+int(deferred)+len({m['source'] for m in compiled['media']['image']}-guide_sources)
+            row.update(valid=True,prompt=prompt,model_prompt=compiled['prompt'],continuity=continuity,input_mode=shot.get('input_mode','reference'),keyframes=shot.get('keyframes',{}),keyframe_points=shot.get('keyframe_points',[]),references=[{'id':aid,'name':(by_id.get(aid) or next((a for a in reference_cards(shot) if a['id']==aid),{'name':aid}))['name']} for aid in compiled['labels']],media_counts={kind:image_count+(1 if compiled.get('continuity_reference') else 0) if kind=='image' else len(items) for kind,items in compiled['media'].items()},**({'continuity_reference':compiled['continuity_reference']} if compiled.get('continuity_reference') else {}))
             shots.append(shot);used_names.add(name)
         except (ValueError,KeyError,TypeError) as error:
             row['error']=str(error);errors.append({'index':i,'message':str(error)})

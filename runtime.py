@@ -2,7 +2,7 @@
 import hashlib
 import json
 from pathlib import Path
-from .core import compile_shot,compile_plan,preflight,identifier
+from .core import compile_shot,compile_plan,preflight,identifier,dependency_source,has_motion_successor
 from .storage import Storage
 from .run_logging import event
 
@@ -49,6 +49,7 @@ def media_revision(plan,shot_id=None):
     for shot in ([compile_shot(plan,shot_id)] if shot_id else compile_plan(plan)):
         for items in [*shot['media'].values(),shot.get('keyframe_media',[])]:
             for item in items:
+                if item.get('from_previous'):continue
                 source=item['source']
                 if source not in result:
                     p=resolve_media(source)
@@ -215,7 +216,7 @@ def load_image(source,reference_size=None):
         im=ImageOps.exif_transpose(im).convert('RGB')
         from .reference_size import target_size
         size=target_size(*im.size,'image',reference_size)
-        if im.size!=size:im=im.resize(size,Image.Resampling.LANCZOS)
+        if im.size!=size:im=ImageOps.fit(im,size,method=Image.Resampling.LANCZOS,centering=(0.5,0.5))
         return torch.from_numpy(np.array(im).astype(np.float32)/255.0)[None]
 
 def load_audio(source,start=0.0,duration=6.0):
@@ -272,7 +273,7 @@ def current_shot(plan,shot_id):
         # The exact prefix phase is known when the previous cache is read.
         # Budget its maximum visible head; do not append a blanket extra chunk.
         frames=requested+max(22,head)+16
-    if any(s.get('input_mode','reference')!='keyframes' and s.get('continuity',{}).get('mode') in ('motion_guide','previous_latent') and s.get('continuity',{}).get('source_shot')==shot_id for s in plan['shots']):
+    if has_motion_successor(plan,shot_id):
         frames=max(frames,22+17*(frames//17))
     frames+=(5-frames)%17
     return shot,frames,head
@@ -320,25 +321,35 @@ class Star7DirectorConditioning:
             shape=Storage(data_root()).latent_video_shape(director_plan['id'],shot_id,'base',row['version'])
             from .vendor.aimixer.h3_motion_context import pixel_frames_for_latent_t
             frames=pixel_frames_for_latent_t(shape[2])
+        from .keyframe_timeline import require_valid,guide_frame
+        require_valid(next(s for s in director_plan['shots'] if s['id']==shot_id))
         if not processing:check_dependency(director_plan,shot_id,prompt)
         settings=director_plan.get('settings',{})
         kwargs={}
-        kwargs['ref_images']={'ref_image_'+str(i):load_image(item['source'],director_plan.get('reference_size')) for i,item in enumerate(shot['media']['image'])}
+        previous_pixels=None
+        def previous_image():
+            nonlocal previous_pixels
+            if previous_pixels is None:
+                from .core import dependency_source
+                from .tail_reference import load
+                source=dependency_source(director_plan,shot_id)
+                if not source:raise ValueError('此镜头没有上段视频可作为首帧')
+                previous_pixels=load(postprocess_source(director_plan,source),director_plan.get('reference_size'))
+            return previous_pixels
+        kwargs['ref_images']={'ref_image_'+str(i):previous_image() if item.get('from_previous') else load_image(item['source'],director_plan.get('reference_size')) for i,item in enumerate(shot['media']['image'])}
         for i,item in enumerate(shot['media']['audio']):kwargs['ref_audio_'+str(i)]=load_audio(item['source'],float(item.get('start_seconds',0)),float(item.get('duration_seconds',6)))
         # Video soundtracks are intentionally excluded from public audio slots;
         # only explicitly referenced voice/audio cards define <Audio N> labels.
         for i,item in enumerate(shot['media']['video']):
             frames_in=load_video(item['source'],float(item.get('start_seconds',0)),float(item.get('duration_seconds',6)),director_plan.get('reference_size'))
             kwargs['ref_video_'+str(i)]=frames_in
-        for endpoint,item in shot.get('keyframes',{}).items():
-            if item.get('from_previous'):
-                from .core import dependency_source
-                from .tail_reference import load
-                source=dependency_source(director_plan,shot_id)
-                if not source:raise ValueError('此镜头没有上段视频可作为首帧')
-                kwargs[endpoint+'_frame']=load(postprocess_source(director_plan,source),director_plan.get('reference_size'))
-            else:kwargs[endpoint+'_frame']=load_image(item['source'],director_plan.get('reference_size'))
         mode=shot['continuity']['mode']
+        motion_keyframes=next(s for s in director_plan['shots'] if s['id']==shot_id).get('input_mode')=='keyframes' and (mode=='motion_guide' or has_motion_successor(director_plan,shot_id))
+        endpoint_images={}
+        for endpoint,item in shot.get('keyframes',{}).items():
+            image=previous_image() if item.get('from_previous') else load_image(item['source'],director_plan.get('reference_size'))
+            if motion_keyframes:endpoint_images[endpoint]=image
+            else:kwargs[endpoint+'_frame']=image
         if first_frame is not None and mode!='independent':raise ValueError('外接首帧与连续性参考不能同时使用，请选择独立镜头')
         if first_frame is not None:kwargs['first_frame']=first_frame
         if last_frame is not None:kwargs['last_frame']=last_frame
@@ -369,15 +380,37 @@ class Star7DirectorConditioning:
         # Face identity must follow a character card, never whichever scene or
         # prop happened to occupy <Picture 1> in the user's prompt.
         context=dict(context)
+        from .continuity import MODES,apply
+        if mode in MODES and not processing:positive,latent,head=apply(director_plan,shot,positive,latent,video_vae,audio_vae,prompt)
+        elif motion_keyframes and processing:
+            from .handoff import EXPORT
+            saved=Storage(data_root()).latent_info(director_plan['id'],shot_id,'base',row['version'])
+            head=int(saved.get(EXPORT,{}).get('trim_frames',head))
+        if motion_keyframes:
+            from .handoff import EXPORT
+            latent={**latent,EXPORT:{**latent.get(EXPORT,{}),'trim_frames':head,'keyframe_timeline':1}}
+        context['keyframe_points']=[]
+        if shot.get('keyframe_points') or endpoint_images:
+            from comfy_extras.nodes_minimax_h3 import MiniMaxH3AddGuide,temporal_shape
+            native_frames=temporal_shape(frames)[0]
+            for point in shot['keyframe_points']:
+                image=load_image(point['source'],director_plan.get('reference_size'))
+                index=head+guide_frame(point['time_seconds'],shot['duration'],max(1,round(shot['duration']*24))) if motion_keyframes else guide_frame(point['time_seconds'],shot['duration'],native_frames)
+                positive=unpack(MiniMaxH3AddGuide.execute(positive,latent,index,vae=video_vae,image=image))[0]
+                context['keyframe_points'].append({'frame_idx':index,'image':image})
+            for endpoint,image in endpoint_images.items():
+                index=head if endpoint=='first' else head+max(1,round(shot['duration']*24))-1
+                positive=unpack(MiniMaxH3AddGuide.execute(positive,latent,index,vae=video_vae,image=image))[0]
+                context['keyframe_points'].append({'frame_idx':index,'image':image})
         context['identity_reference']=None
         for card in director_plan['assets']:
             if card['kind']=='character' and card['id'] in shot['labels']:
                 character_sources={m['source'] for m in card.get('media',[]) if m['type']=='image'}
                 index=next((i for i,m in enumerate(shot['media']['image']) if m['source'] in character_sources),None)
                 if index is not None:context['identity_reference']=kwargs['ref_images']['ref_image_'+str(index)];break
-        from .continuity import MODES,apply
-        if mode in MODES and not processing:positive,latent,_=apply(director_plan,shot,positive,latent,video_vae,audio_vae,prompt)
-        context['positive']=positive
+        if shot.get('keyframe_points') or shot.get('keyframes'):
+            context['positive']=[[tensor,{k:v for k,v in meta.items() if k!='minimax_keyframes'}] for tensor,meta in positive]
+        else:context['positive']=positive
         from .handoff import prepare_refinement,restore_prefix
         context['star7_motion_refinement']=lambda output,conditioning:prepare_refinement(output,conditioning,director_plan,shot_id,prompt)
         context['star7_motion_restore']=restore_prefix
@@ -414,8 +447,11 @@ class Star7DirectorTrim:
         if handoff_latent is not None:head=int(handoff_latent.get(EXPORT,{}).get('trim_frames',head))
         if len(images)<=head:raise ValueError('生成视频短于连续性参考头')
         shot=compile_shot(director_plan,shot_id);requested=max(1,round(shot['duration']*24))
-        if shot.get('keyframes',{}).get('last') and len(images)>requested:
+        motion_timeline=shot['continuity']['mode']=='motion_guide' or has_motion_successor(director_plan,shot_id)
+        if not motion_timeline and (shot.get('keyframes',{}).get('last') or shot.get('keyframe_points')) and len(images)>requested:
             from .endpoint_timing import fit_endpoints
+            if head:
+                images=images[head:];audio=dict(audio);audio['waveform']=audio['waveform'][...,round(head/24*audio['sample_rate']):]
             result,output=fit_endpoints(images,audio,requested)
             return result,output,len(result)
         result=images[head:head+requested]
@@ -444,7 +480,7 @@ class Star7DirectorComplete:
         if handoff_latent is not None:
             from .handoff import EXPORT,KEY
             snapshot={k:handoff_latent[k] for k in ('samples',KEY,'star7_face_latent_overlays') if k in handoff_latent}
-            snapshot[EXPORT]={'trim_frames':int(handoff_latent.get(EXPORT,{}).get('trim_frames',current_shot(director_plan,shot_id)[2])),'frame_count':int(frame_count),'base_version':base['version'] if base else None}
+            snapshot[EXPORT]={**handoff_latent.get(EXPORT,{}),'trim_frames':int(handoff_latent.get(EXPORT,{}).get('trim_frames',current_shot(director_plan,shot_id)[2])),'frame_count':int(frame_count),'base_version':base['version'] if base else None}
             handoff_version=store.save_latent(director_plan['id'],shot_id,'final',fingerprint,snapshot)
             event('handoff_cache_saved',project=director_plan['id'],shot=shot_id,version=handoff_version)
         store.record_output(director_plan['id'],shot_id,fingerprint,str(path),frame_count,post=original.get('post',{}),base_version=base['version'] if base else None,parameter_fingerprint=encode(director_plan,shot_id,previous),handoff_version=handoff_version)

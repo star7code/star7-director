@@ -11,10 +11,6 @@ def inactive_references(plan,compiled):
     by_id={a['id']:a for a in plan['assets']};warnings=[]
     for result in compiled:
         shot=next(s for s in plan['shots'] if s['id']==result['id']);smart=shot.get('input_mode','reference')=='keyframes';names=[]
-        if smart:
-            for aid in result['labels']:
-                card=by_id[aid]
-                if any(m['type'] in ('image','video') for m in card.get('media',[])):names.append(card['name'])
         for text in (shot['prompt'],result['prompt']):
             for match in MENTION.finditer(text):
                 token=mention_name(match);name=None
@@ -24,8 +20,9 @@ def inactive_references(plan,compiled):
                         elif not shot.get('keyframes',{}).get('last'):name='尾帧'
                     elif shot.get('continuity',{}).get('mode')!='tail_reference':name='尾帧参考'
                 elif token==SELECTED_REFERENCE_ID and (smart or shot.get('continuity',{}).get('mode')!='selected_frame'):name='参考帧'
-                elif token=='__star7_first_frame__' and not (smart and shot.get('keyframes',{}).get('first')):name='首帧'
+                elif token=='__star7_first_frame__' and not (smart and not shot.get('keyframe_motion') and shot.get('keyframes',{}).get('first')):name='首帧'
                 elif token=='__star7_last_frame__' and not (smart and shot.get('keyframes',{}).get('last')):name='尾帧'
+                if token.startswith('__star7_keyframe_') and not smart:name='当前关键帧'
                 if name:names.append(name)
         names=list(dict.fromkeys(names))
         if names:warnings.append({'shot_id':shot['id'],'references':names,'message':shot['id']+'：'+ '、'.join(names)+' 在当前模式下无效'})
@@ -69,6 +66,8 @@ async def validate_generation(plan,prepared,scope='all',shot_id=None):
     desks=[(nid,v) for nid,v in prompt.items() if v['class_type']=='Star7DirectorDesk']
     branches=set()
     for shot in selected:
+        from .keyframe_timeline import require_valid
+        require_valid(next(s for s in plan['shots'] if s['id']==shot['id']))
         original=next(s for s in plan['shots'] if s['id']==shot['id']);post=original.get('post',{})
         branch=(bool(post.get('hd')),bool(post.get('face')),post.get('face_count'))
         if branch in branches:continue

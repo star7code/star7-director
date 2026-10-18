@@ -1,10 +1,32 @@
-import importlib,sys,types,tempfile,unittest,json,copy
+import importlib,sys,types,tempfile,unittest,json,copy,ast,asyncio
 from pathlib import Path
 from unittest.mock import patch
 ROOT=Path(__file__).resolve().parents[1];sys.path[:0]=[str(ROOT.parents[1]),str(ROOT)]
 pkg=types.ModuleType('project_store_test');pkg.__path__=[str(ROOT)];sys.modules[pkg.__name__]=pkg
 store=importlib.import_module(pkg.__name__+'.project_store');rt=importlib.import_module(pkg.__name__+'.runtime')
 class Tests(unittest.TestCase):
+ def test_nested_media_route_serves_classified_frames_and_blocks_traversal(self):
+  from aiohttp import web
+  from aiohttp.test_utils import TestClient,TestServer
+  async def check():
+   with tempfile.TemporaryDirectory(dir=ROOT/'tests') as tmp,patch.object(store,'data_root',return_value=Path(tmp)):
+    frame=store.folder('frames')/'media/keyframes/a/frame.png';frame.parent.mkdir(parents=True);frame.write_bytes(b'frame-bytes')
+    tree=ast.parse((ROOT/'routes.py').read_text(encoding='utf-8'));fn=next(n for n in tree.body if isinstance(n,ast.AsyncFunctionDef) and n.name=='project_media');route=fn.decorator_list[0].args[0].value;fn.decorator_list=[]
+    namespace={'__package__':pkg.__name__,'web':web};exec(compile(ast.Module(body=[fn],type_ignores=[]),'routes.py','exec'),namespace)
+    app=web.Application();app.router.add_get(route,namespace['project_media'])
+    async with TestClient(TestServer(app)) as client:
+     response=await client.get('/star7/director/project-media/frames/media/keyframes/a/frame.png');self.assertEqual(response.status,200);self.assertEqual(await response.read(),b'frame-bytes')
+     response=await client.get('/star7/director/project-media/frames/media/keyframes%5C..%5Csecret.png');self.assertEqual(response.status,400)
+     response=await client.get('/star7/director/project-media/frames/media/missing.png');self.assertEqual(response.status,404)
+  asyncio.run(check())
+ def test_direct_keyframes_are_owned_and_classified_without_library_cards(self):
+  from PIL import Image
+  with tempfile.TemporaryDirectory(dir=ROOT/'tests') as tmp,patch.object(store,'data_root',return_value=Path(tmp)),patch.object(rt,'data_root',return_value=Path(tmp)):
+   root=Path(tmp);external=root/'frame.png';Image.new('RGB',(32,32)).save(external)
+   p={'schema_version':'1.0','id':'frames','assets':[],'shots':[{'id':'a','duration':2,'prompt':'','input_mode':'keyframes','keyframes':{'first':{'source':'external.png'}},'keyframe_points':[{'id':'p','time_seconds':1,'source':'external.png'}]}]}
+   with patch.object(store,'resolve_media',return_value=external):saved=store.save(p,{})
+   shot=saved['plan']['shots'][0];first=shot['keyframes']['first']['source'];self.assertIn('/media/keyframes/a/',first);self.assertEqual(shot['keyframe_points'][0]['source'],first);self.assertEqual(saved['plan']['assets'],[])
+   owned=root/'projects/frames/media/keyframes/a';self.assertEqual(len(list(owned.glob('*.png'))),1);self.assertTrue(external.is_file())
  def test_save_clone_cache_fingerprint_and_delete_preserve_video(self):
   import torch
   from PIL import Image

@@ -10,12 +10,17 @@ try:
 except ImportError:
     from reference_size import normalize as reference_limits
 
+try:
+    from .keyframe_timeline import validate_points,active_points,active_endpoints,reference_cards,FRAME_PREFIX
+except ImportError:
+    from keyframe_timeline import validate_points,active_points,active_endpoints,reference_cards,FRAME_PREFIX
+
 ID = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$")
 try:
     from .references import MENTION,TAIL_REFERENCE_ID,SELECTED_REFERENCE_ID,is_tail_reference,mention_name
 except ImportError:
     from references import MENTION,TAIL_REFERENCE_ID,SELECTED_REFERENCE_ID,is_tail_reference,mention_name
-KINDS = {"character", "prop", "scene", "effect", "voice", "video"}
+KINDS = {"character", "prop", "scene", "effect", "voice", "video", "keyframe"}
 LIMITS = {"image": 9, "audio": 3, "video": 3}
 STAGES = {"base", "hd", "face", "final"}
 
@@ -27,11 +32,14 @@ def identifier(value):
 def dependency_source(plan,shot_id):
     index=next(i for i,s in enumerate(plan['shots']) if s['id']==shot_id);shot=plan['shots'][index]
     if shot.get('input_mode')=='keyframes':
-        if shot.get('keyframes',{}).get('first',{}).get('from_previous'):
+        if shot.get('keyframe_motion') or shot.get('keyframes',{}).get('first',{}).get('from_previous'):
             return plan['shots'][index-1]['id'] if index else None
         return None
     continuity=shot.get('continuity',{})
     return continuity.get('source_shot') if continuity.get('mode','independent')!='independent' else None
+
+def has_motion_successor(plan,shot_id):
+    return any((s.get('keyframe_motion') if s.get('input_mode')=='keyframes' else s.get('continuity',{}).get('mode') in ('motion_guide','previous_latent')) and dependency_source(plan,s['id'])==shot_id for s in plan['shots'])
 
 def validate_continuity_settings(cfg):
     if not isinstance(cfg,dict):raise ValueError('连续性设置必须是对象')
@@ -44,7 +52,7 @@ def validate_continuity_settings(cfg):
     if isinstance(v,bool) or not isinstance(v,(int,float)) or not math.isfinite(v) or not .4<=v<=.95:raise ValueError('重绘幅度必须为0.40–0.95')
 
 def injects_image_description(asset, smart=False):
-    return not smart and bool(asset.get('inject_description',False)) and bool(asset.get('description','').strip()) and asset.get('kind') in ('character','prop','scene') and any(m.get('type')=='image' for m in asset.get('media',[]))
+    return bool(asset.get('inject_description',False)) and bool(asset.get('description','').strip()) and asset.get('kind') in ('character','prop','scene') and any(m.get('type')=='image' for m in asset.get('media',[]))
 
 
 def validate(plan):
@@ -94,6 +102,9 @@ def validate(plan):
         if not isinstance(shot,dict): raise ValueError('镜头必须是对象')
         if not isinstance(shot.get('references',[]),list) or not all(isinstance(v,str) for v in shot.get('references',[])): raise ValueError('镜头引用必须是文字列表')
         if shot.get('input_mode','reference') not in ('reference','keyframes'):raise ValueError('无效镜头输入模式')
+        validate_points(shot)
+        if 'keyframe_motion' in shot and type(shot['keyframe_motion']) is not bool:raise ValueError('上段尾部运动引导必须为开关值')
+        if shot.get('keyframe_motion') and shot.get('input_mode')=='keyframes' and not shot_ids:raise ValueError('首个镜头没有上段可用于运动引导')
         endpoints=shot.get('keyframes',{})
         if not isinstance(endpoints,dict) or any(k not in ('first','last') or not isinstance(v,dict) or not (isinstance(v.get('source'),str) or k=='first' and v.get('from_previous') is True) for k,v in endpoints.items()):raise ValueError('首尾帧必须是图片素材或上段尾帧设置')
         if endpoints.get('first',{}).get('from_previous') and not shot_ids:raise ValueError('首个镜头没有上段视频，不能使用上段尾帧')
@@ -143,15 +154,21 @@ def _compile_shot(plan, shot_id, parameter_payload=False):
     custom_prompt=prompt_options.get('custom_prompt','').strip() if prompt_options.get('custom_prompt_enabled',bool(prompt_options.get('custom_prompt','').strip())) else ''
     if custom_prompt:shot['prompt']=original_prompt.rstrip()+'\n\n'+custom_prompt
     smart=shot.get('input_mode','reference')=='keyframes'
-    keyframes=shot.get('keyframes',{}) if smart else {}
-    if smart:shot['continuity']={'mode':'independent'}
+    keyframes=active_endpoints(shot) if smart else {}
+    if smart:shot['continuity']={'mode':'motion_guide','source_shot':dependency_source(plan,shot_id)} if shot.get('keyframe_motion') else {'mode':'independent'}
     by_id={a["id"]:a for a in plan["assets"]}
     names={n:a["id"] for a in plan["assets"] for n in [a["id"],a["name"],*a.get("aliases",[])]}
+    timeline_cards=reference_cards(shot)
+    by_id.update({a['id']:a for a in timeline_cards})
+    names.update({n:a['id'] for a in timeline_cards for n in (a['id'],'当前关键帧/'+a['name'])})
+    def reference_name(match):
+        return '__star7_last_frame__' if smart and match[1]=='尾帧' else mention_name(match)
     requested=[]
     def select(name):
         if is_tail_reference(name,names):
             return TAIL_REFERENCE_ID
-        if name in (SELECTED_REFERENCE_ID,'__star7_first_frame__','__star7_last_frame__'):return name
+        if name in (SELECTED_REFERENCE_ID,'__star7_first_frame__','__star7_last_frame__') and name not in by_id:return name
+        if not smart and name.startswith(FRAME_PREFIX):return name
         aid=names.get(name)
         if aid is None: raise ValueError("Unknown material: @"+name)
         if aid not in requested: requested.append(aid)
@@ -159,16 +176,17 @@ def _compile_shot(plan, shot_id, parameter_payload=False):
     visiting=set();expanded=set()
     def expand(name):
         aid=select(name)
-        if aid in (TAIL_REFERENCE_ID,SELECTED_REFERENCE_ID,'__star7_first_frame__','__star7_last_frame__'):return aid
+        if aid in (TAIL_REFERENCE_ID,SELECTED_REFERENCE_ID,'__star7_first_frame__','__star7_last_frame__') and aid not in by_id:return aid
+        if not smart and aid.startswith(FRAME_PREFIX):return aid
         if aid in visiting:raise ValueError('文字素材引用形成循环：'+by_id[aid]['name'])
         if aid in expanded:return aid
         visiting.add(aid)
         if not by_id[aid].get('media') or injects_image_description(by_id[aid],smart):
-            for match in MENTION.finditer(by_id[aid].get('description','')):expand(mention_name(match))
+            for match in MENTION.finditer(by_id[aid].get('description','')):expand(reference_name(match))
         voice=by_id[aid].get('voice_id')
         if voice:expand(voice)
         visiting.remove(aid);expanded.add(aid);return aid
-    for match in MENTION.finditer(shot['prompt']):expand(mention_name(match))
+    for match in MENTION.finditer(shot['prompt']):expand(reference_name(match))
     for ref in shot.get('references',[]):expand(ref)
     media={kind:[] for kind in LIMITS}
     labels={}
@@ -176,7 +194,6 @@ def _compile_shot(plan, shot_id, parameter_payload=False):
         labels[aid]=[]
         for item in by_id[aid].get("media",[]):
             kind=item["type"]
-            if smart and kind in ('image','video'):continue
             existing=next((i for i,m in enumerate(media[kind]) if m["source"]==item["source"]),None)
             if existing is None:
                 media[kind].append({"asset_id":aid,**item})
@@ -201,8 +218,8 @@ def _compile_shot(plan, shot_id, parameter_payload=False):
         explicit.add(aid)
         card=by_id[aid]
         if not card.get('media') or injects_image_description(card,smart):
-            for match in MENTION.finditer(card.get('description','')):mark_explicit(mention_name(match))
-    for match in MENTION.finditer(shot['prompt']):mark_explicit(mention_name(match))
+            for match in MENTION.finditer(card.get('description','')):mark_explicit(reference_name(match))
+    for match in MENTION.finditer(shot['prompt']):mark_explicit(reference_name(match))
     explicit_audio={label for aid in explicit for label in labels.get(aid,[]) if label.startswith('<Audio ')}
     fallback_audio={}
     for aid in requested:
@@ -212,13 +229,16 @@ def _compile_shot(plan, shot_id, parameter_payload=False):
         if tags and not all(tag in explicit_audio or tag in shot['prompt'] for tag in tags):
             fallback_audio[aid]=' '.join(tags)
     def text_for(aid):
+        if not smart and aid.startswith(FRAME_PREFIX):return '@{'+aid+'}'
+        if aid in labels and by_id.get(aid,{}).get("timeline_reference"):
+            return " ".join(labels[aid])
         if aid==TAIL_REFERENCE_ID:
             if smart:return 'the supplied last frame' if keyframes.get('last') else '@{尾帧}'
             return continuity_reference['label'] if reference_mode=='tail_reference' else '@{尾帧参考}'
         if aid==SELECTED_REFERENCE_ID:return continuity_reference['label'] if reference_mode=='selected_frame' else '@{参考帧}'
         if aid=='__star7_first_frame__':return 'the supplied first frame' if smart and keyframes.get('first') else '@{首帧}'
         if aid=='__star7_last_frame__':return 'the supplied last frame' if smart and keyframes.get('last') else '@{尾帧}'
-        label='@{'+aid+'}' if smart and any(m['type'] in ('image','video') for m in by_id[aid].get('media',[])) else ' '.join(labels[aid])
+        label=' '.join(labels[aid])
         if label:
             if aid in fallback_audio:label+=' '+fallback_audio[aid]
             description=by_id[aid].get('description','').strip()
@@ -226,7 +246,7 @@ def _compile_shot(plan, shot_id, parameter_payload=False):
         text=MENTION.sub(replace,by_id[aid].get('description') or by_id[aid]['name'])
         return text+' '+fallback_audio[aid] if aid in fallback_audio else text
     def replace(match):
-        aid=select(mention_name(match))
+        aid=select(reference_name(match))
         if aid==TAIL_REFERENCE_ID and smart and match[1]!='尾帧':return match[0]
         if aid==TAIL_REFERENCE_ID and not (smart and keyframes.get('last') or not smart and reference_mode=='tail_reference'):return match[0]
         if aid==SELECTED_REFERENCE_ID and reference_mode!='selected_frame':return match[0]
@@ -252,6 +272,7 @@ def _compile_shot(plan, shot_id, parameter_payload=False):
     if plan.get('prompt_options',{}).get('no_background_music',False):
         prompt=re.sub(r'(?mis)^\s*non_diegetic_music\s*:.*?(?=^\s*[a-z_]+\s*:|\Z)', '', prompt).rstrip()+'\nnon_diegetic_music:\nN/A'
     fingerprint_shot={k:v for k,v in shot.items() if k not in ('seed_control','next_seed')}
+    if smart and shot.get('keyframe_motion'):fingerprint_shot['keyframes']=keyframes
     fingerprint_shot['prompt']=original_prompt
     # Hash the effective flag, preserving old per-shot fingerprints while
     # global settings take precedence over legacy values.
@@ -264,9 +285,11 @@ def _compile_shot(plan, shot_id, parameter_payload=False):
     else:fingerprint_shot.pop('prompt_options',None)
     if not smart:
         fingerprint_shot.pop('keyframes',None)
+        fingerprint_shot.pop('keyframe_points',None)
         fingerprint_shot.pop('input_mode',None)
     if plan.get('prompt_options',{}).get('no_background_music',False):fingerprint_shot.setdefault('prompt_options',{})['no_background_music']=True
     payload={"shot":fingerprint_shot,"settings":plan.get("settings",{}),"assets":[by_id[a] for a in requested]}
+    if smart and (shot.get('keyframe_motion') or has_motion_successor(plan,shot_id)):payload['keyframe_motion_timeline']=1
     if fallback_audio:payload['voice_inline_recipe']=1
     # An absent/disabled switch has the same behavior as legacy assets.
     payload['assets']=[{k:v for k,v in card.items() if k!='inject_description' or injects_image_description(card,smart)} for card in payload['assets']]
@@ -280,8 +303,9 @@ def _compile_shot(plan, shot_id, parameter_payload=False):
     if aliases:payload=canonical_media(payload)
     if not continuity_reference and any(is_tail_reference(mention_name(m)) for m in MENTION.finditer(prompt)):payload['tail_marker_passthrough']=1
     if continuity_reference:payload['tail_reference']={'version':3 if reference_mode=='selected_frame' else 2,**{k:v for k,v in continuity_reference.items() if k!='token'}}
-    if media['image'] or media['video'] or continuity_reference or keyframes:
-        sizes=reference_limits(plan.get('reference_size'));payload['reference_size']={'mode':sizes['mode'],**{k:v for k,v in sizes.items() if ((media['image'] or continuity_reference or keyframes) and k.startswith('image_') or media['video'] and k.startswith('video_')) and (k.endswith('_mp') if sizes['mode']=='megapixels' else k.endswith('_long_edge'))}}
+    points=active_points(shot)
+    if media['image'] or media['video'] or continuity_reference or keyframes or points:
+        sizes=reference_limits(plan.get('reference_size'));payload['reference_size']={'mode':sizes['mode'],**{k:v for k,v in sizes.items() if ((media['image'] or continuity_reference or keyframes or points) and k.startswith('image_') or media['video'] and k.startswith('video_')) and (k.endswith('_mp') if sizes['mode']=='megapixels' else k.endswith('_long_edge'))}}
     if shot.get('continuity',{}).get('mode','independent') in ('previous_latent','motion_guide','motion_redraw'):
         cfg={**plan.get('continuity_settings',{}),**shot['continuity']};payload['av_handoff']={'version':2,'context_frames':cfg.get('context_frames',22),'audio':cfg.get('audio',True),'redraw':cfg.get('redraw',.65) if cfg['mode']=='motion_redraw' else None}
         if cfg['mode']!='motion_redraw' and cfg.get('drift_control',False) and cfg.get('drift_strength',.3)>0:
@@ -289,7 +313,7 @@ def _compile_shot(plan, shot_id, parameter_payload=False):
     if parameter_payload:return payload
     fingerprint=hashlib.sha256(json.dumps(payload,ensure_ascii=False,sort_keys=True,allow_nan=False).encode()).hexdigest()
     return {"id":shot_id,"prompt":prompt,"duration":shot.get("duration",5),"seed":shot.get("seed",0),
-            "keyframe_media":[{'type':'image',**m} for m in keyframes.values() if not m.get('from_previous')],"keyframes":keyframes,"continuity":shot.get("continuity",{"mode":"independent"}),"media":media,"labels":labels,"fingerprint":fingerprint,**({'continuity_reference':continuity_reference} if continuity_reference else {})}
+            "keyframe_media":[{'type':'image',**m} for m in [*keyframes.values(),*points] if m.get('source') and not m.get('from_previous')],"keyframes":keyframes,"keyframe_points":points,"continuity":shot.get("continuity",{"mode":"independent"}),"media":media,"labels":labels,"fingerprint":fingerprint,**({'continuity_reference':continuity_reference} if continuity_reference else {})}
 
 def compile_plan(plan):
     validate(plan)
@@ -316,6 +340,7 @@ def preflight(plan, input_root):
     for shot in compile_plan(plan):
         for values in [*shot["media"].values(),shot.get("keyframe_media",[])]:
             for item in values:
+                if item.get('from_previous'):continue
                 source=item['source']
                 if source.startswith('star7-project/'):
                     media_root=(Path(__file__).resolve().parent/'data'/'projects').resolve();path=(media_root/source[len('star7-project/'):]).resolve()

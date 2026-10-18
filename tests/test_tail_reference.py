@@ -8,6 +8,29 @@ core=importlib.import_module(pkg.__name__+'.core');rt=importlib.import_module(pk
 def plan():
  return {'schema_version':'1.0','id':'tail_test','settings':{'width':64,'height':32},'assets':[{'id':'actor','name':'白衣','kind':'character','media':[{'type':'image','source':'actor.png'}]},{'id':'room','name':'教室','kind':'scene','media':[{'type':'image','source':'room.png'}]}],'shots':[{'id':'a','duration':1,'seed':666,'prompt':'garden','continuity':{'mode':'independent'}},{'id':'b','duration':1,'seed':666,'prompt':'subject_definitions: <Subject 1> is @{白衣}. <Subject 2> is @{教室}.\nsummary: reverse shot\nretention_analysis: retain clothing\ndetailed_description: Chalkboard behind the white-clothed woman.\noverall_soundscape: room tone\nnon_diegetic_music: N/A','continuity':{'mode':'tail_reference','source_shot':'a'}}]}
 class Tests(unittest.TestCase):
+ def test_preview_decodes_once_per_revision_and_shares_full_and_thumbnail(self):
+  import av
+  from PIL import Image
+  from concurrent.futures import ThreadPoolExecutor
+  with tempfile.TemporaryDirectory(dir=ROOT/'tests') as tmp:
+   video=Path(tmp)/'clip.mp4';cache=Path(tmp)/'previews'
+   def write(color):
+    with av.open(str(video),'w') as out:
+     stream=out.add_stream('mpeg4',rate=24);stream.width=800;stream.height=450;stream.pix_fmt='yuv420p'
+     for value in ['green','yellow',color]:
+      for packet in stream.encode(av.VideoFrame.from_image(Image.new('RGB',(800,450),value))):out.mux(packet)
+     for packet in stream.encode():out.mux(packet)
+   write('blue');info={'path':video,'record':{'frame_count':3}}
+   with patch.object(av,'open',wraps=av.open) as opened:
+    with ThreadPoolExecutor(max_workers=4) as pool:results=list(pool.map(lambda full:tail.preview_file(info,cache,full),[True,False,True,False]))
+    self.assertEqual(opened.call_count,1)
+    self.assertEqual(results[0],results[2]);self.assertEqual(results[1],results[3]);old_revision=results[0][1]
+   with Image.open(results[0][0]) as image:self.assertEqual(image.size,(800,450));self.assertGreater(image.getpixel((400,225))[2],200)
+   with Image.open(results[1][0]) as image:self.assertEqual(image.width,600)
+   write('red')
+   with patch.object(av,'open',wraps=av.open) as opened:
+    latest,revision=tail.preview_file(info,cache);tail.preview_file(info,cache);self.assertEqual(opened.call_count,1);self.assertNotEqual(revision,old_revision)
+   with Image.open(latest) as image:self.assertGreater(image.getpixel((400,225))[0],200)
  def test_virtual_token_mode_priority_and_scope(self):
   p=plan();p['shots'][1]['prompt']='Use @{尾帧} for placement, @{白衣} for identity and @{教室} for architecture. Use @{尾帧} for the requested new viewpoint.'
   c=core.compile_shot(p,'b');self.assertEqual(c['continuity_reference']['label'],'<Picture 3>');self.assertNotIn('@',c['prompt']);self.assertEqual(len(c['media']['image']),2);self.assertIn('Use <Picture 3> for placement, <Picture 1> for identity and <Picture 2>',c['prompt'])

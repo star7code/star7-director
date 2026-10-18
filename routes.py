@@ -27,13 +27,13 @@ async def local_project_action(request):
         return web.json_response(result)
     except (ValueError,KeyError,TypeError,OSError) as e:return web.json_response({'error':str(e)},status=400)
 
-@PromptServer.instance.routes.get('/star7/director/project-media/{pid}/media/{filename}')
+@PromptServer.instance.routes.get('/star7/director/project-media/{pid}/media/{filename:.+}')
 async def project_media(request):
     from .core import identifier
     from .project_store import folder
     try:
         pid=identifier(request.match_info['pid']);name=request.match_info['filename']
-        if __import__('pathlib').Path(name).name!=name:raise ValueError('无效素材名')
+        if any(part in ('..','.') for part in name.replace('\\','/').split('/')) or '\\' in name or ':' in name or name.startswith('/'):raise ValueError('无效素材名')
         root=(folder(pid)/'media').resolve();path=(root/name).resolve()
         if not path.is_relative_to(root) or not path.is_file():return web.json_response({'error':'素材不存在'},status=404)
         return web.FileResponse(path)
@@ -582,18 +582,29 @@ async def batch_cancel(request):
         return web.json_response(cancel(rid,body['shot_id'],body.get('confirm') is True,body.get('expected')))
     except Exception as error:return web.json_response({'error':str(error)},status=400)
 
+@PromptServer.instance.routes.get('/star7/director/tail-revision/{pid}/{sid}')
+async def tail_revision(request):
+    from .runtime import postprocess_source
+    from .tail_reference import output_revision
+    from .core import identifier
+    try:
+        pid=identifier(request.match_info['pid']);sid=identifier(request.match_info['sid'])
+        revision=output_revision(postprocess_source({'id':pid},sid))
+        return web.json_response({'revision':revision},headers={'Cache-Control':'no-store'})
+    except (ValueError,OSError):
+        return web.json_response({'revision':None},headers={'Cache-Control':'no-store'})
+
 @PromptServer.instance.routes.get('/star7/director/tail-image/{pid}/{sid}')
 async def tail_image(request):
     try:
-        from .runtime import postprocess_source
-        from .continuity import export_tail
+        from .runtime import postprocess_source,data_root
+        from .tail_reference import preview_file
         from .core import identifier
-        import asyncio,io
-        from PIL import Image
+        import asyncio
         pid=identifier(request.match_info['pid']);sid=identifier(request.match_info['sid'])
         def decode():
-            pixels,_=export_tail(postprocess_source({'id':pid},sid),1,False)
-            picture=Image.fromarray((pixels[0].cpu().numpy()*255).round().clip(0,255).astype('uint8'));picture.thumbnail((600,600))
-            data=io.BytesIO();picture.save(data,format='PNG');return data.getvalue()
-        return web.Response(body=await asyncio.to_thread(decode),content_type='image/png',headers={'Cache-Control':'no-store'})
+            return preview_file(postprocess_source({'id':pid},sid),data_root()/'projects'/pid/'previews'/'tail'/sid,request.query.get('full')=='1')
+        path,revision=await asyncio.to_thread(decode)
+        cache='private, max-age=31536000, immutable' if request.query.get('v')==revision else 'no-cache'
+        return web.FileResponse(path,headers={'Cache-Control':cache})
     except Exception as error:return web.json_response({'error':str(error)},status=404)

@@ -58,7 +58,7 @@ def source_changed(plan,sid,saved):
 
 def uses_previous_tail(plan,sid):
     shot=next(s for s in plan['shots'] if s['id']==sid)
-    return shot.get('input_mode')=='keyframes' and bool(shot.get('keyframes',{}).get('first',{}).get('from_previous'))
+    return shot.get('input_mode')=='keyframes' and not shot.get('keyframe_motion') and bool(shot.get('keyframes',{}).get('first',{}).get('from_previous'))
 
 def encode(plan,sid,previous=None):
     source=source_revision(plan,sid)
@@ -118,13 +118,14 @@ def editable_inputs(value):
     smart=shot.get('input_mode','reference')=='keyframes'
     mode=(shot.get('continuity') or {}).get('mode','independent')
     mode='motion_guide' if mode=='previous_latent' else mode
-    continuity={'mode':mode if not smart else 'independent'}
-    if not smart and mode!='independent':
+    continuity={'mode':mode if not smart or shot.get('keyframe_motion') else 'independent'}
+    if (not smart or shot.get('keyframe_motion')) and mode!='independent':
         continuity['source_shot']=shot.get('continuity',{}).get('source_shot')
         if mode=='selected_frame':continuity['frame']=shot.get('continuity',{}).get('frame',0)
     frames={}
     if smart:
         for slot in ('first','last'):
+            if slot=='first' and shot.get('keyframe_motion'):continue
             frame=(shot.get('keyframes') or {}).get(slot) or {}
             if frame.get('from_previous'):
                 frames[slot]={'from_previous':True,'source_shot':value.get('first_from_previous')}
@@ -136,8 +137,9 @@ def editable_inputs(value):
             result.update(start_seconds=item.get('start_seconds',0),duration_seconds=item.get('duration_seconds',6))
         return result
     for card in value.get('assets',[]):
+        if card.get('timeline_reference'):continue
         media=[selected_media(m)
-               for m in card.get('media',[]) if not smart or m.get('type')=='audio']
+               for m in card.get('media',[])]
         # Keyframe mode does not consume the prompt's image/video references.
         # A character image still matters when it is used for face repair.
         if smart and post.get('face') and card.get('kind')=='character':
@@ -148,7 +150,7 @@ def editable_inputs(value):
                                 'inject_description':injects_image_description(card,smart),
                                 'voice_id':card.get('voice_id') or None}
     return {'duration':shot.get('duration',5),'seed':shot.get('seed',0),'prompt':shot.get('prompt',''),
-            'input_mode':'keyframes' if smart else 'reference','continuity':continuity,'keyframes':frames,
+            'input_mode':'keyframes' if smart else 'reference','continuity':continuity,'keyframes':frames,'keyframe_points':[{k:p[k] for k in ('source','time_seconds') if k in p} for p in sorted(shot.get('keyframe_points',[]),key=lambda p:p['time_seconds'])] if smart else [],
             'references':sorted(shot.get('references') or []),'assets':assets,'drift_control':value.get('drift_control') or None,
             'post':{'hd':bool(post.get('hd')),'face':bool(post.get('face')),
                     'face_count':post.get('face_count',value.get('generation',{}).get('395',{}).get('face_count',1)) if post.get('face') else None},
@@ -167,7 +169,7 @@ def visible_changes(old,new,names=None):
         add('shot.prompt','提示词','原提示词','提示词内容已修改')
     mode_changed=before['input_mode']!=after['input_mode']
     if mode_changed:
-        labels={'reference':'参考模式','keyframes':'智能首尾帧模式'}
+        labels={'reference':'参考模式','keyframes':'智能关键帧模式'}
         add('shot.input_mode','输入模式',labels[before['input_mode']],labels[after['input_mode']])
     elif before['continuity']!=after['continuity']:
         def describe(value):
@@ -181,6 +183,8 @@ def visible_changes(old,new,names=None):
         def describe(frame):
             return '未设置' if not frame else '使用上段视频尾帧' if frame.get('from_previous') else '已指定图片'
         add('shot.keyframes.'+slot,label,describe(a),'已更换图片' if a and b and a.get('source') and b.get('source') else describe(b))
+    if before.get('keyframe_points')!=after.get('keyframe_points'):
+        add('shot.keyframe_points','关键帧时间／图片','原关键帧设置','关键帧设置已修改')
     if not mode_changed:
         if before['references']!=after['references']:
             add('shot.references','素材引用','原引用列表','引用列表已修改')

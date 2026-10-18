@@ -1,0 +1,14 @@
+import assert from 'node:assert/strict';
+import {createTailPreview} from '../web/tail-preview.mjs';
+let target={projectId:'p',shotId:'before'},revision='one',reads=0,changes=0;
+const preview=createTailPreview({getTarget:()=>target,fetchRevision:async()=>{reads++;return revision},onChange:()=>changes++});
+await preview.check();const first=preview.url(target);
+await preview.check();await preview.check();assert.equal(changes,1);assert.equal(preview.url(target),first);
+revision='two';await preview.check();assert.equal(changes,2);assert.notEqual(preview.url(target),first);
+target={projectId:'other',shotId:'before'};assert.match(preview.url(target),/initial/);await preview.check();assert.equal(changes,3);
+revision=null;await preview.check();assert.match(preview.url(target),/missing/);
+revision='restored';await preview.check();assert.match(preview.url(target),/restored/);
+let release;const deferred=createTailPreview({getTarget:()=>target,fetchRevision:()=>{reads++;return new Promise(r=>release=r)},onChange:()=>changes++});
+const before=reads,count=changes,pending=deferred.check();deferred.check();assert.equal(reads,before+1);
+target=null;release('late');await pending;assert.equal(changes,count);
+console.log('PASS: unchanged version reuse, replacement/deletion/recovery, project isolation, deduplicated and stale requests');

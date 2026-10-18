@@ -30,6 +30,9 @@ def check_request(plan,shot_id,prompt,*,processing=False,store=None):
     elif record.get('handoff_version'):
         final=info('final',record['handoff_version'])
     timeline=(final or base).get(EXPORT,{})
+    previous=next(s for s in plan['shots'] if s['id']==sid)
+    if previous.get('input_mode')=='keyframes' and not base.get(EXPORT,{}).get('keyframe_timeline'):
+        raise ValueError('前段 '+sid+' 使用旧关键帧时间轴，请先重新生成前段以建立精确时间轴的无损运动衔接缓存')
     head=int(timeline.get('trim_frames',current_shot(plan,sid)[2]))
     window(pixel_frames_for_latent_t(base['samples'][0]['shape'][2]),head,record['frame_count'],options(plan,shot)['context_frames'])
     if processing and post.get('hd'):

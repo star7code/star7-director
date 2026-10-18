@@ -184,6 +184,8 @@ class Star7DirectorDesk:
         compile_plan(plan)
         shot_id=plan.get('runtime',{}).get('active_shot_id') or (plan['shots'][0]['id'] if plan['shots'] else None)
         if shot_id is None:raise ValueError('请先添加镜头')
+        from .keyframe_timeline import require_valid
+        require_valid(next(s for s in plan['shots'] if s['id']==shot_id))
         from .handoff import check_request
         check_request(plan,shot_id,prompt,processing=plan.get('runtime',{}).get('scope')=='process')
         from .continuity import check_dependency

@@ -35,6 +35,6 @@ class Tests(unittest.TestCase):
    archive=lib.export_library(library)
    try:
     with patch.object(lib,'MEDIA',root/'media'):result=lib.import_library(archive,{'name':'素材库','assets':[]})
-    self.assertEqual(len(result['assets']),6);self.assertTrue(all(not a['media'] and a['description'].startswith('文字-') for a in result['assets']))
+    self.assertEqual(len(result['assets']),len(core.KINDS));self.assertTrue(all(not a['media'] and a['description'].startswith('文字-') for a in result['assets']))
    finally:archive.unlink()
 if __name__=='__main__':unittest.main()

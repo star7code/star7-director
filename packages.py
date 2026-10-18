@@ -1,7 +1,7 @@
 """Portable projects contain explicit source media only; never caches or models."""
 import copy,hashlib,json,os,shutil,tempfile,uuid,zipfile
 from pathlib import Path,PurePosixPath
-from .core import validate,compile_plan
+from .core import validate,compile_plan,identifier
 from .assets import MEDIA,verify_upload,finish_upload,EXTENSIONS
 
 def asset_sources(asset):return [*asset.get('media',[]),*([asset['text_file']] if asset.get('text_file') else [])]
@@ -11,9 +11,9 @@ LIMIT=2*1024**3
 def project_assets(plan):
     result=list(plan['assets'])
     for shot in plan['shots']:
-        images=[m for m in shot.get('keyframes',{}).values() if not m.get('from_previous')]
+        images=[m for m in [*shot.get('keyframes',{}).values(),*shot.get('keyframe_points',[])] if m.get('source') and not m.get('from_previous')]
         for image in images:image.setdefault('type','image')
-        if images:result.append({'media':images})
+        if images:result.append({'media':images,'shot_id':shot['id']})
     return result
 
 def digest(path):
@@ -64,7 +64,8 @@ def export_package(plan,workflow,input_root):
                         verify_upload(file,media['type'])
                         total+=file.stat().st_size
                         if total>LIMIT:raise ValueError('项目包素材超过 2 GiB 上限')
-                        name='media/'+uuid.uuid4().hex+file.suffix.lower()
+                        category='keyframes/'+identifier(asset['shot_id']) if asset.get('shot_id') else 'assets/'+asset['kind']
+                        name='media/'+category+'/'+uuid.uuid4().hex+file.suffix.lower()
                         entries[source]={'path':name,'sha256':digest(file),'size':file.stat().st_size}
                         z.write(file,name)
             manifest={'format':'star7-director-project','version':1,'plan':plan,'media':entries}
@@ -119,7 +120,7 @@ def import_package(archive,pack_id=None):
                 for media in asset_sources(asset):
                     source=media['source'];entry=entries[source]
                     if source not in mapped:
-                        src=validated[entry['path']];dest=destination/(uuid.uuid4().hex+src.suffix)
+                        src=validated[entry['path']];parent=destination.joinpath(*PurePosixPath(entry['path']).parts[1:-1]);parent.mkdir(parents=True,exist_ok=True);dest=parent/(uuid.uuid4().hex+src.suffix)
                         shutil.copyfile(src,dest);created.append(dest)
                         meta=finish_upload(dest,media.get('original_name',src.name),media['type'],entry['sha256'],MEDIA)
                         if meta.get('thumbnail_source'):created.append(MEDIA/meta['thumbnail_source'].removeprefix('star7-director/'))

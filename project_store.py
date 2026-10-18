@@ -45,9 +45,9 @@ def read(pid):
         return json.loads(path.read_text(encoding='utf8'))
 def own_media(plan):
     mappings={};aliases=dict(plan.get('media_aliases',{}));base=folder(plan['id'])/'media';base.mkdir(parents=True,exist_ok=True)
-    def visit(value):
+    def visit(value,category):
         if isinstance(value,list):
-            for v in value:visit(v)
+            for v in value:visit(v,category)
         elif isinstance(value,dict):
             for key,item in list(value.items()):
                 if key in ('source','thumbnail_source') and isinstance(item,str):
@@ -56,14 +56,16 @@ def own_media(plan):
                         src=resolve_media(item);hasher=hashlib.sha256()
                         with src.open('rb') as stream:
                             for chunk in iter(lambda:stream.read(1024**2),b''):hasher.update(chunk)
-                        digest=hasher.hexdigest();identity=aliases.get(item,item);name=hashlib.sha256(identity.encode()).hexdigest()[:12]+'-'+digest[:24]+src.suffix.lower();dest=base/name
+                        digest=hasher.hexdigest();identity=aliases.get(item,item);name=category+'/'+hashlib.sha256(identity.encode()).hexdigest()[:12]+'-'+digest[:24]+src.suffix.lower();dest=base/name;dest.parent.mkdir(parents=True,exist_ok=True)
                         if not dest.exists():
                             copy_atomic(src,dest)
                         target='star7-project/'+plan['id']+'/media/'+name;mappings[item]=target;aliases[target]=aliases.get(item,item)
                     value[key]=mappings[item]
-                else:visit(item)
-    visit(plan['assets'])
-    for shot in plan['shots']:visit(shot.get('keyframes',{}))
+                else:visit(item,category)
+    for asset in plan['assets']:visit(asset,'assets/'+asset['kind'])
+    for shot in plan['shots']:
+        visit(shot.get('keyframes',{}),'keyframes/'+shot['id'])
+        visit(shot.get('keyframe_points',[]),'keyframes/'+shot['id'])
     if aliases:plan['media_aliases']=aliases
     return mappings
 def migrate_cache(pid):

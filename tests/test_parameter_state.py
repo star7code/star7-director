@@ -113,7 +113,7 @@ class Tests(unittest.TestCase):
   shot=self.plan['shots'][0];shot['prompt']='@{actor} walks';record=self.record('s1')
   shot['input_mode']='keyframes';shot['keyframes']={}
   rows=ps.details(self.plan,'s1',record)['changes']
-  self.assertEqual(rows,[{'field':'shot.input_mode','label':'输入模式','before':'参考模式','after':'智能首尾帧模式'}])
+  self.assertEqual(rows,[{'field':'shot.input_mode','label':'输入模式','before':'参考模式','after':'智能关键帧模式'}])
   self.assertFalse(rt.parameter_matches(self.plan,'s1',{},record))
   shot['input_mode']='reference'
   self.assertTrue(rt.parameter_matches(self.plan,'s1',{},record))

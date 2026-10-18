@@ -23,18 +23,21 @@ class Tests(unittest.TestCase):
      self.assertNotEqual(result['plan']['id'],plan['id']);self.assertEqual(result['plan']['assets'][0]['id'],'actor')
      self.assertEqual(result['plan']['prompt_options'],plan['prompt_options']);self.assertTrue(result['plan']['assets'][0]['inject_description']);self.assertEqual(result['plan']['assets'][0]['description'],'white apron')
      self.assertEqual(json.loads(result['workflow']['nodes'][0]['widgets_values'][0])['prompt_options'],plan['prompt_options'])
-     imported=list((folder/'imported').glob('*.png'))[0];self.assertEqual(imported.read_bytes(),original)
+     imported=list((folder/'imported').rglob('*.png'))[0];self.assertEqual(imported.read_bytes(),original)
      self.assertEqual(image.read_bytes(),original)
      self.assertEqual(json.loads(result['workflow']['nodes'][1]['widgets_values'][0])['assets'],result['plan']['assets'])
     finally:archive.unlink(missing_ok=True)
  def test_endpoints_roundtrip_without_adding_asset_cards(self):
   with tempfile.TemporaryDirectory(dir=ROOT) as tmp:
-   folder=Path(tmp);image,plan,workflow=self.fixture(folder);plan['assets']=[];plan['shots'][0].update(input_mode='keyframes',prompt='Use @{首帧}.',keyframes={'first':{'source':'frame.png'},'last':{'source':'frame.png'}})
+   folder=Path(tmp);image,plan,workflow=self.fixture(folder);plan['assets']=[];plan['shots'][0].update(input_mode='keyframes',prompt='Use @{首帧}.',keyframes={'first':{'source':'frame.png'},'last':{'source':'frame.png'}},keyframe_points=[{'id':'middle','time_seconds':1,'source':'middle.png'}])
    with patch.object(runtime,'resolve_media',return_value=image),patch.object(packs,'MEDIA',folder/'imported'):
     archive=packs.export_package(plan,workflow,folder)
     try:
+     with zipfile.ZipFile(archive) as z:
+      paths=[m['path'] for m in json.loads(z.read('project.json'))['media'].values()];self.assertEqual(len(paths),2);self.assertTrue(all(n.startswith('media/keyframes/s1/') for n in paths))
      imported=packs.import_package(archive)['plan'];self.assertEqual(imported['assets'],[])
      frames=imported['shots'][0]['keyframes'];self.assertEqual(frames['first']['source'],frames['last']['source']);self.assertTrue(frames['first']['source'].startswith('star7-director/'))
+     point=imported['shots'][0]['keyframe_points'][0];self.assertEqual(point['time_seconds'],1);self.assertEqual(point['id'],'middle');self.assertTrue(point['source'].startswith('star7-director/'))
      self.assertTrue((folder/'imported'/frames['first']['source'].removeprefix('star7-director/')).is_file());self.assertEqual(imported['shots'][0]['input_mode'],'keyframes')
     finally:archive.unlink(missing_ok=True)
  def test_traversal_is_rejected(self):

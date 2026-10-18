@@ -61,7 +61,8 @@
               "prop",
               "effect",
               "voice",
-              "video"
+              "video",
+              "keyframe"
             ]
           },
           "name": {
@@ -210,6 +211,65 @@
                 }
               }
             ]
+          },
+          "input_mode": {
+            "enum": [
+              "reference",
+              "keyframes"
+            ]
+          },
+          "keyframe_motion": {"type": "boolean", "default": false},
+          "keyframes": {
+            "type": "object",
+            "properties": {
+              "first": {
+                "type": "object",
+                "properties": {
+                  "source": {
+                    "type": "string"
+                  },
+                  "from_previous": {
+                    "type": "boolean"
+                  }
+                }
+              },
+              "last": {
+                "type": "object",
+                "properties": {
+                  "source": {
+                    "type": "string"
+                  },
+                  "from_previous": {
+                    "type": "boolean"
+                  }
+                }
+              }
+            },
+            "additionalProperties": false
+          },
+          "keyframe_points": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": [
+                "id",
+                "time_seconds"
+              ],
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "time_seconds": {
+                  "type": "number",
+                  "minimum": 0
+                },
+                "source": {
+                  "type": "string"
+                }
+              },
+              "additionalProperties": true
+            }
           }
         }
       }

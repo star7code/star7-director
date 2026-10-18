@@ -21,9 +21,9 @@ class Tests(unittest.TestCase):
  def test_only_effective_description_counts_as_parameter_change(self):
   p=plan();old=state.snapshot(p,'s');p['assets'][0]['description']='wearing a red apron';self.assertEqual(state.visible_changes(old,state.snapshot(p,'s')),[])
   p['assets'][0]['inject_description']=True;changes=state.visible_changes(old,state.snapshot(p,'s'));self.assertEqual([c['field'] for c in changes],['assets.actor.description'])
- def test_keyframes_do_not_inject_invalid_picture_description(self):
+ def test_keyframes_inject_enabled_description_with_numbered_image(self):
   p=plan();p['assets'][0]['inject_description']=True;p['shots'][0].update(input_mode='keyframes',keyframes={'first':{'source':'first.png'}})
-  out=core.compile_shot(p,'s');self.assertNotIn('white apron',out['prompt']);self.assertEqual(out['media']['image'],[]);self.assertEqual(len(out['media']['audio']),1)
+  out=core.compile_shot(p,'s');self.assertIn('white apron',out['prompt']);self.assertEqual(len(out['media']['image']),1);self.assertEqual(len(out['media']['audio']),1)
  def test_standard_subject_voice_binding(self):
   p=plan();p['assets'][0]['inject_description']=True;p['shots'][0]['prompt']='subject_definitions:\n<Subject 1> is Xiao Ke using @{actor}.\nsummary:\nTalk.'
   out=core.compile_shot(p,'s');self.assertIn('<Picture 1> <Audio 1> wearing a white apron',out['prompt']);self.assertNotIn('voice timbre for',out['prompt'])

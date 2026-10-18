@@ -854,7 +854,7 @@ def _add_hd_endpoint_guides(positive, latent, context):
     """Re-encode original first/last frames against the actual HD latent canvas."""
     first_frame = context.get("first_frame")
     last_frame = context.get("last_frame")
-    if first_frame is None and last_frame is None:
+    if first_frame is None and last_frame is None and not context.get('keyframe_points'):
         return positive, "none"
     video_vae = context.get("video_vae")
     if video_vae is None:
@@ -875,6 +875,11 @@ def _add_hd_endpoint_guides(positive, latent, context):
             positive, latent, -1, vae=video_vae, image=last_frame
         ))[0]
         applied.append("last")
+    for point in context.get("keyframe_points", []):
+        positive = _unpack(MiniMaxH3AddGuide.execute(
+            positive, latent, point["frame_idx"], vae=video_vae, image=point["image"]
+        ))[0]
+        applied.append("keyframe")
     return positive, "+".join(applied)
 
 
