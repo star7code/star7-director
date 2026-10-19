@@ -301,7 +301,8 @@ def _execute_reference_to_video(reference_node, clip, video_vae, audio_vae, prom
 
 
 def _decode_video_frames(vae, latent: torch.Tensor) -> torch.Tensor:
-    images = vae.decode(latent)
+    from .frame_memory import decode_native_frames
+    images = decode_native_frames(vae,latent)
     if images.ndim == 5:
         if int(images.shape[0]) != 1:
             raise ValueError("Star7 H3 Face Repair currently supports one generated video at a time")
@@ -387,7 +388,8 @@ def _resize_image_batch(images: torch.Tensor, width: int, height: int) -> torch.
         return images
     import torch.nn.functional as F
 
-    output = torch.empty(
+    from .frame_memory import allocate_frames
+    output = allocate_frames(
         (int(images.shape[0]), int(height), int(width), 3),
         dtype=torch.float32, device="cpu",
     )
@@ -440,11 +442,13 @@ def _stitch_face_overlay(frames: torch.Tensor, repaired: torch.Tensor, overlay: 
     }
     source_width, source_height = transform["src_size"]
     scale = (width / source_width + height / source_height) * 0.5
+    from .frame_memory import allocate_frames,storage_active
+    output_buffer=allocate_frames(tuple(frames.shape),dtype=frames.dtype,device=frames.device) if storage_active() else None
     return H3FaceStitch().run(
         frames, repaired, _scale_face_transform(transform, width, height),
         "face_only", int(overlay.get("mask_dilation", 16)),
         max(1, int(round(float(overlay["feather"]) * scale))),
-        float(overlay.get("colour_match", 1.0)), float(overlay["blend"]), "fade_out",
+        float(overlay.get("colour_match", 1.0)), float(overlay["blend"]), "fade_out",output_buffer=output_buffer,
     )[0]
 
 
@@ -896,8 +900,6 @@ _PRESETS = {
 class MiniMaxH3FaceRefineStar7:
     @classmethod
     def INPUT_TYPES(cls):
-        from .nodes import _attention_backend_choices
-
         return {
             "required": {
                 "sampled_av_latent": ("LATENT",),
@@ -930,8 +932,9 @@ class MiniMaxH3FaceRefineStar7:
                         "tooltip": "Model strength for the selected face-repair LoRA.",
                     },
                 ),
+                # Legacy private slot: hidden in Director UI, inheritance only.
                 "face_attention": (
-                    [INHERIT_FIRST_PASS, *_attention_backend_choices()],
+                    [INHERIT_FIRST_PASS],
                     {"default": INHERIT_FIRST_PASS},
                 ),
                 "face_count": ("INT", {"default": 1, "min": 1, "max": 4, "step": 1}),
@@ -1104,38 +1107,9 @@ class MiniMaxH3FaceRefineStar7:
         refine_source_model, lora_summary = apply_selected_lora(
             self, model, face_lora, face_lora_strength
         )
-        attention_summary = "inherit first pass"
-        attention_config_snapshot = None
-        attention_runtime_config = None
-        if str(face_attention) not in {"", INHERIT_FIRST_PASS, "inherit", "inherit first pass"}:
-            from . import nodes as chunk_nodes
-
-            requested_attention = str(face_attention)
-            attention_config_snapshot = copy.deepcopy(chunk_nodes._CONFIG)
-            try:
-                refine_source_model = chunk_nodes.install_model_patch(
-                    refine_source_model,
-                    int(chunk_nodes._CONFIG.get("chunk_tokens", 8192)),
-                    bool(chunk_nodes._CONFIG.get("auto_halve_on_oom", True)),
-                    bool(chunk_nodes._CONFIG.get("verbose", True)),
-                    int(chunk_nodes._CONFIG.get("mlp_chunk_tokens", 8192)),
-                    bool(chunk_nodes._CONFIG.get("out_proj_memory_protection", True)),
-                    bool(chunk_nodes._CONFIG.get("reuse_mlp_weights", True)),
-                    requested_attention,
-                    unique_id,
-                    qkv_chunk_tokens=int(chunk_nodes._CONFIG.get("qkv_chunk_tokens", 8192)),
-                    out_proj_chunk_tokens=int(chunk_nodes._CONFIG.get("out_proj_chunk_tokens", 4096)),
-                )
-                attention_runtime_config = copy.deepcopy(chunk_nodes._CONFIG)
-            finally:
-                chunk_nodes._CONFIG.clear()
-                chunk_nodes._CONFIG.update(attention_config_snapshot)
-            attention_summary = requested_attention
-            _LOG.info(
-                "Star7 H3 face repair | attention override | %s",
-                attention_summary,
-            )
-
+        # The connected model owns precision, device kernels and chunk patches.
+        # Never replace them with a private backend during refinement.
+        attention_summary = "inherit connected model"
         sigma_starts = []
 
         def sample_track(track_result, composite_images, pass_index):
@@ -1174,17 +1148,9 @@ class MiniMaxH3FaceRefineStar7:
                 ",".join(f"{float(s):.4f}" for s in sigmas),
             )
             sample_started = time.perf_counter()
-            if attention_runtime_config is not None:
-                chunk_nodes._CONFIG.clear()
-                chunk_nodes._CONFIG.update(attention_runtime_config)
-            try:
-                sampled = _unpack(SamplerCustomAdvanced.execute(
-                    noise, guider, sampler, sigmas, refine_latent
-                ))[0]
-            finally:
-                if attention_config_snapshot is not None:
-                    chunk_nodes._CONFIG.clear()
-                    chunk_nodes._CONFIG.update(attention_config_snapshot)
+            sampled = _unpack(SamplerCustomAdvanced.execute(
+                noise, guider, sampler, sigmas, refine_latent
+            ))[0]
             _LOG.debug(
                 "Star7 H3 face repair | phase=sample completed | face=%d | %.2fs | steps=%d",
                 int(pass_index) + 1, time.perf_counter() - sample_started, int(refine_steps),

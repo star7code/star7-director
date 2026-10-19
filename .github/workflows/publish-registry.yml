@@ -21,12 +21,19 @@ jobs:
           REGISTRY_ACCESS_TOKEN: ${{ secrets.REGISTRY_ACCESS_TOKEN }}
         run: |
           python - <<'PY'
-          import os, pathlib, tomllib
+          import os, pathlib, re, tomllib
           config = tomllib.loads(pathlib.Path('pyproject.toml').read_text())
           if not config['tool']['comfy']['PublisherId'].strip():
               raise SystemExit('Registry publisher ID has not been configured.')
           if not os.environ.get('REGISTRY_ACCESS_TOKEN'):
               raise SystemExit('Missing REGISTRY_ACCESS_TOKEN repository secret.')
+          version = config['project']['version']
+          changelog = pathlib.Path('CHANGELOG.md').read_text(encoding='utf-8')
+          section = re.search(r'(?ms)^## ' + re.escape(version) + r'[^\S\n][^\n]*\n(.*?)(?=^## |\Z)', changelog)
+          if section is None or not section[1].strip():
+              raise SystemExit('Missing changelog for the version being published.')
+          with open(os.environ['GITHUB_ENV'], 'a', encoding='utf-8') as env:
+              env.write('COMFY_NODE_CHANGELOG<<STAR7_REGISTRY_CHANGELOG\n' + section[1].strip() + '\nSTAR7_REGISTRY_CHANGELOG\n')
           PY
       - name: Publish reviewed package
         uses: Comfy-Org/publish-node-action@main

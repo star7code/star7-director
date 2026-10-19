@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.3.1 — 2026-10-19
+
+- Prefer RAM for final RGB buffers; use reclaimable float32 temporary mappings only when the available-memory budget is insufficient or CPU allocation fails. Preserve native H3 temporal/spatial decoding, and select endpoint frames by index during Director encoding instead of duplicating the full clip. Extend the adaptive allocation policy to face decode/resize/compositing and release private executor intermediates immediately. Sampling, pixel values, CRF and existing caches remain unchanged; disk fallback requires temporary space and may be slower on slow drives.
+- Log CPU video-encoding and pixel-conversion timing separately from model sampling and VAE decode.
+- Remove the duplicated GPU-specific chunk/attention engines from Director. HD and face refinement preserve the connected model backend and patches; native inputs no longer enter private SLA/Sol/SM75 paths through refinement choices or schema discovery.
+- Retire independent HD/face attention selectors. Migrate legacy overrides to inheritance without changing other generation parameters, media or the author workflow. Preserve HD spatial tiling, latent upscaling, face repair and chunked VAE decode.
+- Clarify that H3 Chunk 2.18.8 fixes an uncovered modulation/gating allocation in its enhanced loader, not a Director-only incompatibility or a universal GPU support guarantee.
+- Avoid a bundled Windows x265 SIMD heap-corruption path for HEVC inputs smaller than 64px; keep their dimensions and quality settings unchanged, and include the process exit code in encoder errors.
+
 ## 0.3.0 — 2026-10-18
 
 - 新增自由关键帧模式：按需添加任意数量的关键帧，在镜头时间轴内拖动定位或填写秒数，不再受固定图片槽位限制。支持 K 模式分镜导入，保留稳定图片引用，并在生成前检查越界和采样帧冲突。

@@ -2166,7 +2166,7 @@ class H3FaceStitch:
 
     def run(self, base_images, refined_crops, transform, paste_region, mask_dilation, feather,
             colour_match, blend, undetected_frames="fade_out", masks=None,
-            feather_scales_with_crop=False):
+            feather_scales_with_crop=False, output_buffer=None):
         boxes = transform["boxes"]
         if undetected_frames == "composite_anyway":
             weights = None
@@ -2205,7 +2205,15 @@ class H3FaceStitch:
         except Exception:
             dev = base_images.device
         dt = base_images.dtype
-        out = base_images[..., :3].clone()
+        if output_buffer is None:
+            out = base_images[..., :3].clone()
+        else:
+            out=output_buffer
+            if tuple(out.shape)!=tuple(base_images[..., :3].shape) or out.dtype!=base_images.dtype:
+                raise ValueError('Face stitch output buffer does not match source frames')
+            for start in range(0,len(base_images),8):
+                mm.throw_exception_if_processing_interrupted()
+                out[start:start+8].copy_(base_images[start:start+8,...,:3])
 
         # chunked so the warped batch does not blow VRAM: N x H x W x 3 at once
         per_frame_mb = (H * W * 3 * 4) / 2 ** 20

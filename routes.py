@@ -263,6 +263,7 @@ async def generation_fields(request):
         if nid not in ('308','126','376','395','preview'):continue
         cls=registry(spec['class_type']);schema=cls.INPUT_TYPES();defs={**schema.get('required',{}),**schema.get('optional',{})}
         for name,value in spec['inputs'].items():
+            if name in ('second_pass_attention','face_attention'):continue
             definition=defs.get(name)
             if definition is None or isinstance(value,list):continue
             typ=definition[0];options=definition[1] if len(definition)>1 else {}

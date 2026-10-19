@@ -43,7 +43,8 @@ class Star7DirectorSaveVideo:
             if private.is_relative_to(temp_root) and private.parent.name=='star7-director-staging':shutil.rmtree(private)
 
 def encode_mp4(path,images,audio=None,frame_rate=24,crf=19):
-    import av,numpy as np
+    import av,numpy as np,logging,time
+    started=time.perf_counter();conversion_seconds=0.0
     shape=getattr(images,'shape',None)
     if not shape or len(shape)!=4 or shape[0]<1 or shape[3] not in (3,4):raise ValueError('视频编码需要非空的 NHWC RGB 图像')
     count,height,width,_=shape
@@ -51,6 +52,8 @@ def encode_mp4(path,images,audio=None,frame_rate=24,crf=19):
     rate=Fraction(str(frame_rate))
     if not 0<rate<=120 or not 0<=int(crf)<=51:raise ValueError('视频编码帧率或 CRF 无效')
     def numpy(value):return value.detach().cpu().numpy() if hasattr(value,'detach') else np.asarray(value)
+    log=logging.getLogger('Star7DirectorEncode')
+    log.info('Star7 video encode | codec=libx264 (CPU) | %dx%d frames=%d fps=%s | frame_source=%s',width,height,count,rate,type(images).__name__)
     with av.open(str(path),'w',format='mp4',options={'movflags':'+faststart'}) as container:
         video=container.add_stream('libx264',rate=rate)
         video.width=int(width);video.height=int(height);video.pix_fmt='yuv420p'
@@ -76,11 +79,13 @@ def encode_mp4(path,images,audio=None,frame_rate=24,crf=19):
         for index in range(int(count)):
             import comfy.model_management
             comfy.model_management.throw_exception_if_processing_interrupted()
+            conversion_started=time.perf_counter()
             pixel=numpy(images[index])[...,:3]
             if np.issubdtype(pixel.dtype,np.floating):
                 if not np.isfinite(pixel).all():raise ValueError('视频画面包含无效数值')
                 pixel=(np.clip(pixel,0,1)*255).round().astype(np.uint8)
             pixel=np.ascontiguousarray(pixel,dtype=np.uint8)
+            conversion_seconds+=time.perf_counter()-conversion_started
             frame=av.VideoFrame.from_ndarray(pixel,format='rgb24');frame.pts=index;frame.time_base=1/rate
             for packet in video.encode(frame):container.mux(packet)
         for packet in video.encode():container.mux(packet)
@@ -93,3 +98,4 @@ def encode_mp4(path,images,audio=None,frame_rate=24,crf=19):
             for converted in resampler.resample(None):
                 for packet in sound.encode(converted):container.mux(packet)
             for packet in sound.encode():container.mux(packet)
+    log.info('Star7 video encode completed | total=%.2fs pixel_conversion=%.2fs',time.perf_counter()-started,conversion_seconds)

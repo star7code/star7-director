@@ -24,6 +24,7 @@
 *.mp3
 *.zip
 *.star7.zip
+*.frames
 
 # Python and local development environments.
 __pycache__/

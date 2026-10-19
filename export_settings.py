@@ -1,5 +1,5 @@
 """Validated export-only encoding; generated clips and caches stay unchanged."""
-import json,math,shutil,subprocess,uuid
+import json,math,os,shutil,subprocess,uuid
 from pathlib import Path
 
 DEFAULTS={'format':'h264-mp4','frame_rate':0,'quality_mode':'crf','crf':19,'bitrate_mbps':8,'pix_fmt':'yuv420p','preset':'medium','include_audio':True,'audio_bitrate_kbps':192,'save_metadata':False}
@@ -48,6 +48,18 @@ def run(input_args,target,plan,copy=False,codec_args=None):
         with log.open('wb') as errors:
             command=[imageio_ffmpeg.get_ffmpeg_exe(),'-hide_banner','-v','error','-nostdin',*input_args]
             command+=codec_args if codec_args is not None else ['-c','copy','-movflags','+faststart'] if copy else arguments(plan)
+            # The bundled Windows x265 can corrupt the heap with SIMD on a canvas
+            # smaller than 64px. Disable its assembly path only for these tiny
+            # HEVC file inputs; keep dimensions, quality and normal exports intact.
+            if os.name=='nt' and '-c:v' in command and command[command.index('-c:v')+1]=='libx265' and '-i' in input_args:
+                source=Path(input_args[input_args.index('-i')+1])
+                if source.is_file():
+                    import av
+                    try:
+                        with av.open(str(source)) as container:
+                            stream=container.streams.video[0]
+                            if min(stream.width,stream.height)<64:command+=['-x265-params','asm=0']
+                    except (av.FFmpegError,IndexError):pass  # Let FFmpeg report invalid inputs.
             with subprocess.Popen([*command,str(target)],stdout=subprocess.DEVNULL,stderr=errors,creationflags=getattr(subprocess,'CREATE_NO_WINDOW',0)) as process:
                 try:
                     while True:
@@ -55,7 +67,7 @@ def run(input_args,target,plan,copy=False,codec_args=None):
                         try:code=process.wait(timeout=.2);break
                         except subprocess.TimeoutExpired:pass
                 except BaseException:process.terminate();process.wait();raise
-        if code:raise ValueError('导出编码失败：'+log.read_text(encoding='utf-8',errors='replace')[-1500:])
+        if code:raise ValueError('导出编码失败（退出码 '+str(code)+'）：'+log.read_text(encoding='utf-8',errors='replace')[-1500:])
     finally:log.unlink(missing_ok=True)
 
 def export_clip(source,target,plan):

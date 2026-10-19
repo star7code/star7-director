@@ -32,6 +32,8 @@ def merge_library(plan,library):
     if library is not None:
         result['assets']=copy.deepcopy(list(library))
         if hasattr(library,'reference_size'):result['reference_size']=copy.deepcopy(library.reference_size)
+    from .core import normalize_refinement_generation
+    if 'generation' in result:result['generation']=normalize_refinement_generation(result['generation'])
     cfg=result.get('generation',{}).get('376',{})
     cfg.pop('upscale_method',None)
     if cfg.get('upscale_model')=='像素插值（Lanczos）':
@@ -155,8 +157,15 @@ def execute_internal(graph,result,plan,shot_id,prompt=None):
                   seconds=round(time.perf_counter()-started,3) if started is not None else None)
             raise DirectorExecutionError(stage,key,error) from error
         finally:active.remove(key)
-    report=resolve(result)
-    return {'result':(report,),'ui':ui}
+    from .vendor.h3.frame_memory import frame_storage_scope
+    with frame_storage_scope():
+        try:
+            report=resolve(result)
+            return {'result':(report,),'ui':ui}
+        finally:
+            # The recursive executor forms a closure cycle. Do not leave full
+            # RGB clips/models alive until a later cyclic-GC collection.
+            values.clear()
 
 class Star7DirectorDesk:
     @classmethod

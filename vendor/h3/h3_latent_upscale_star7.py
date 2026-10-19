@@ -1148,8 +1148,6 @@ def _upscale_video(
 class MiniMaxH3OneClickHDStar7:
     @classmethod
     def INPUT_TYPES(cls):
-        from .nodes import _attention_backend_choices
-
         return {
             "required": {
                 "enable_hd": ("BOOLEAN", {"default": True}),
@@ -1182,8 +1180,9 @@ class MiniMaxH3OneClickHDStar7:
                         "tooltip": "Model strength for the selected second-pass LoRA.",
                     },
                 ),
+                # Legacy private slot: hidden in Director UI, inheritance only.
                 "second_pass_attention": (
-                    [INHERIT_FIRST_PASS, *_attention_backend_choices()],
+                    [INHERIT_FIRST_PASS],
                     {"default": INHERIT_FIRST_PASS},
                 ),
                 "preset": (
@@ -1384,37 +1383,9 @@ class MiniMaxH3OneClickHDStar7:
             refine_model, lora_summary = apply_selected_lora(
                 self, model, second_pass_lora, second_pass_lora_strength
             )
-            attention_summary = "inherit first pass"
-            attention_config_snapshot = None
-            attention_runtime_config = None
-            if str(second_pass_attention) not in {"", INHERIT_FIRST_PASS, "inherit", "inherit first pass"}:
-                from . import nodes as chunk_nodes
-
-                requested_attention = str(second_pass_attention)
-                attention_config_snapshot = copy.deepcopy(chunk_nodes._CONFIG)
-                try:
-                    refine_model = chunk_nodes.install_model_patch(
-                        refine_model,
-                        int(chunk_nodes._CONFIG.get("chunk_tokens", 8192)),
-                        bool(chunk_nodes._CONFIG.get("auto_halve_on_oom", True)),
-                        bool(chunk_nodes._CONFIG.get("verbose", True)),
-                        int(chunk_nodes._CONFIG.get("mlp_chunk_tokens", 8192)),
-                        bool(chunk_nodes._CONFIG.get("out_proj_memory_protection", True)),
-                        bool(chunk_nodes._CONFIG.get("reuse_mlp_weights", True)),
-                        requested_attention,
-                        unique_id,
-                        qkv_chunk_tokens=int(chunk_nodes._CONFIG.get("qkv_chunk_tokens", 8192)),
-                        out_proj_chunk_tokens=int(chunk_nodes._CONFIG.get("out_proj_chunk_tokens", 4096)),
-                    )
-                    attention_runtime_config = copy.deepcopy(chunk_nodes._CONFIG)
-                finally:
-                    chunk_nodes._CONFIG.clear()
-                    chunk_nodes._CONFIG.update(attention_config_snapshot)
-                attention_summary = requested_attention
-                _LOG.info(
-                    "Star7 H3 HD | second-pass attention override | %s",
-                    attention_summary,
-                )
+            # The connected model owns precision, device kernels and chunk patches.
+            # Never replace them with a private backend during refinement.
+            attention_summary = "inherit connected model"
             guider = _unpack(BasicGuider.execute(refine_model, positive))[0]
             sampler = _unpack(KSamplerSelect.execute(sampler_name))[0]
             noise = _unpack(RandomNoise.execute(int(seed) & 0xFFFFFFFFFFFFFFFF))[0]
@@ -1437,9 +1408,6 @@ class MiniMaxH3OneClickHDStar7:
                     )
                     _LOG.info("Star7 H3 HD | spatial tiling enabled | %s", tiling_summary)
             refine_started = time.perf_counter()
-            if attention_runtime_config is not None:
-                chunk_nodes._CONFIG.clear()
-                chunk_nodes._CONFIG.update(attention_runtime_config)
             transformer_options = refine_model.model_options.setdefault(
                 "transformer_options", {}
             )
@@ -1456,13 +1424,6 @@ class MiniMaxH3OneClickHDStar7:
                     transformer_options[timing_marker] = saved_timing_marker
                 else:
                     transformer_options.pop(timing_marker, None)
-                if attention_config_snapshot is not None:
-                    # Attention kernels read a small amount of Star7 runtime
-                    # state. Restore it even after a failed second pass so a
-                    # cached first-pass chunk node cannot inherit this override
-                    # on the next queued workflow.
-                    chunk_nodes._CONFIG.clear()
-                    chunk_nodes._CONFIG.update(attention_config_snapshot)
             refine_seconds = time.perf_counter() - refine_started
             sampled_members = list(sampled["samples"].unbind())
             if not torch.isfinite(sampled_members[0]).all():

@@ -42,7 +42,8 @@ def _frames_are_finite(frames, chunk_size: int = 8):
 
 
 def _decode_video_frames(video_vae, latent: torch.Tensor) -> torch.Tensor:
-    frames = video_vae.decode(latent)
+    from .frame_memory import decode_native_frames
+    frames = decode_native_frames(video_vae,latent)
     if frames.ndim == 5:
         frames = frames.reshape(-1, *frames.shape[-3:])
     return frames
@@ -117,7 +118,7 @@ class MiniMaxH3ChunkedDecodeStar7:
         _LOG.info(
             "Star7 H3 decode | %dx%d | route=%s%s",
             width, height, route,
-            "" if estimated_mib is None else f" | final frames≈{estimated_mib:.0f} MiB RAM",
+            "" if estimated_mib is None else f" | RGB pixel data≈{estimated_mib:.0f} MiB",
         )
         stage_started=time.perf_counter()
         frames = _decode_video_frames(video_vae, video)
@@ -148,7 +149,7 @@ class MiniMaxH3ChunkedDecodeStar7:
             f"{route} | face stitches={face_stitches} | {elapsed:.2f}s"
         )
         if estimated_mib is not None:
-            report += f" | final IMAGE tensor≈{estimated_mib:.0f} MiB RAM"
+            report += f" | RGB pixel data≈{estimated_mib:.0f} MiB"
         _LOG.info(report)
         _LOG.info('Star7 H3 decode timing | video=%.2fs validation=%.2fs face=%.2fs audio=%.2fs',video_seconds,validation_seconds,stitch_seconds,audio_seconds)
         return frames, decoded_audio, report

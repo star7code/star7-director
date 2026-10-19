@@ -303,11 +303,12 @@ function drawExportSettings(){
 }
 $('export-reset').onclick=()=>{delete plan.export_settings;draft();drawExportSettings()};
 function drawPipeline(){
+ for(const [id,name] of [['376','second_pass_attention'],['395','face_attention']])if(plan.generation?.[id]&&Object.hasOwn(plan.generation[id],name))plan.generation[id][name]='继承一采';
  const hdCfg=plan.generation?.['376'];if(hdCfg){delete hdCfg.upscale_method;if(hdCfg.upscale_model==='像素插值（Lanczos）')hdCfg.upscale_model=pipelineFields.find(f=>f.nodeId==='376'&&f.name==='upscale_model')?.value||'minimax_h3_latent_upscaler_3d_fp16.safetensors'}
  for(const group of ['sampling','hd','face'])$(group+'-fields').replaceChildren();drawPreviewSettings();drawExportSettings();
  const names={sampler_name:'采样器',scheduler:'调度方式',steps:'采样步数',denoise:'去噪强度',upscale_model:'放大模型',second_pass_lora:'二采 LoRA',second_pass_lora_strength:'二采 LoRA 强度',second_pass_attention:'二采注意力',preset:'预设',target_megapixels:'目标像素（MP）',refine_steps:'精修步数',refine_strength:'精修强度',enable_tiling:'启用分格',tile_count:'分格数量',tile_overlap:'分格重叠',face_detector:'人脸检测模型',face_lora:'修脸 LoRA',face_lora_strength:'修脸 LoRA 强度',face_attention:'修脸注意力',face_count:'修复人数',target_face:'目标人脸',custom_strength:'修脸强度',custom_canvas:'修脸尺寸',custom_crop_context:'裁剪上下文',custom_blend:'融合强度',custom_feather:'边缘羽化',preserve_repair_detail:'保留修复细节'};
  const groups={'126':'sampling','308':'sampling','376':'hd','395':'face'};
- for(const field of pipelineFields.filter(f=>f.internal&&groups[f.nodeId]&&f.name!=='upscale_method')){
+ for(const field of pipelineFields.filter(f=>f.internal&&groups[f.nodeId]&&!['upscale_method','second_pass_attention','face_attention'].includes(f.name))){
   if(field.nodeId==='376'&&field.name==='target_megapixels'){drawHDResolution(field);continue}
   const label=node('label',undefined,'pipeline-field'),input=document.createElement(field.choices?'select':'input');
   const value=plan.generation?.[field.nodeId]?.[field.name]??field.value;

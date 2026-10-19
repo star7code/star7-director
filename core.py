@@ -55,6 +55,18 @@ def injects_image_description(asset, smart=False):
     return bool(asset.get('inject_description',False)) and bool(asset.get('description','').strip()) and asset.get('kind') in ('character','prop','scene') and any(m.get('type')=='image' for m in asset.get('media',[]))
 
 
+def normalize_refinement_generation(generation):
+    """Retire backend overrides without mutating saved projects or other settings."""
+    if not isinstance(generation, dict):
+        return generation
+    result = dict(generation)
+    for node_id, field in (("376", "second_pass_attention"), ("395", "face_attention")):
+        values = result.get(node_id)
+        if isinstance(values, dict) and field in values:
+            result[node_id] = {**values, field: "继承一采"}
+    return result
+
+
 def validate(plan):
     if not isinstance(plan, dict) or plan.get("schema_version") != "1.0":
         raise ValueError("Expected director schema_version 1.0")

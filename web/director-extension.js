@@ -33,7 +33,7 @@ function mount(owner,libraryMode=false,dialog=null){
  const downloadVideo=(url,name)=>{const a=document.createElement('a');a.href=url+(url.includes('?')?'&':'?')+new URLSearchParams({name});a.download=name;a.click()};
  const graph=owner.graph,isDesk=owner.comfyClass==='Star7DirectorDesk';let disposed=false,reloadVersion=0,dom=null;
  const attached=()=>!disposed&&owner.graph===graph&&graph.getNodeById(owner.id)===owner;
- const frame=document.createElement('iframe');frame.src=new URL('./index.html?v=20261018-mode-active1&mode='+(libraryMode?'library':isDesk?'desk':'legacy'),import.meta.url).href;frame.style.cssText='display:block;width:100%;height:100%;border:0;min-width:0;border-radius:10px;background:#111317';
+ const frame=document.createElement('iframe');frame.src=new URL('./index.html?v=20261019-model-backend1&mode='+(libraryMode?'library':isDesk?'desk':'legacy'),import.meta.url).href;frame.style.cssText='display:block;width:100%;height:100%;border:0;min-width:0;border-radius:10px;background:#111317';
  const host=document.createElement('div');host.style.cssText='width:100%;height:100%;min-width:0;overflow:hidden;pointer-events:auto;';host.append(frame);
  const widget=hideJSON(owner,libraryMode?'library_json':'project_json');let running=false,stop=false,livePlan=null,activeRun=null,executingOwner=false,exporting=false,serverOwned=false,batchRunId=null;const revisions=new Map();const seenSeeds=new Map(),progressSignatures=new Map();let projectSaveChain=Promise.resolve();
  const send=(type,extra)=>{if(attached())frame.contentWindow?.postMessage(messageData({type,...extra}),location.origin)};

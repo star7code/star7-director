@@ -78,6 +78,8 @@ def generation_identity(plan):
     return result
 
 def run_fingerprint(plan,shot_id,prompt=None,stage='final',legacy_inactive=False,legacy_dependencies=False,legacy_base_dependencies=False,dependency_records=None,parameter_only=False):
+    from .core import normalize_refinement_generation
+    if 'generation' in plan:plan={**plan,'generation':normalize_refinement_generation(plan['generation'])}
     if parameter_only:plan=generation_identity(plan)
     if stage=='base':
         import copy

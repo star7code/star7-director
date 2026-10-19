@@ -1,6 +1,6 @@
 [project]
 name = "star7-director"
-version = "0.3.0"
+version = "0.3.1"
 description = "A two-node MiniMax H3 director desk for storyboards, materials, staged generation, previews and video export."
 readme = "README.md"
 requires-python = ">=3.10"

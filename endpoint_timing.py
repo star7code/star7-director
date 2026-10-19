@@ -18,4 +18,10 @@ def fit_endpoints(images,audio,frames):
         if samples.shape[-1]<target:samples=torch.nn.functional.pad(samples,(0,target-samples.shape[-1]))
         rows.append(samples[...,:target])
     output['waveform']=torch.stack(rows).to(device=wave.device,dtype=wave.dtype)
-    return images[indices],output
+    from .vendor.h3.frame_memory import SelectedFrames,storage_active
+    lazy=storage_active()
+    selected=SelectedFrames(images,indices.cpu().tolist()) if lazy else images[indices]
+    if lazy:
+        import logging
+        logging.getLogger('Star7DirectorFrames').info('Star7 endpoint timing | %d -> %d frames | index-only view; no full RGB copy',count,frames)
+    return selected,output
