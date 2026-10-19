@@ -30,7 +30,8 @@ class Star7DirectorSaveVideo:
             if kwargs.get('format','video/h264-mp4')!='video/h264-mp4':raise ValueError('导演台内置编码使用 H.264 MP4')
             if kwargs.get('pingpong') or kwargs.get('loop_count',0):raise ValueError('镜头导出不支持循环或往返播放')
             source=private/'clip.mp4'
-            encode_mp4(source,kwargs['images'],kwargs.get('audio'),kwargs.get('frame_rate',24),kwargs.get('crf',19))
+            from .export_settings import settings
+            encode_mp4(source,kwargs['images'],kwargs.get('audio'),kwargs.get('frame_rate',24),kwargs.get('crf',19),encoder=settings(director_plan)['encoder'])
             root=Path(folder_paths.get_output_directory()).resolve();target=reserve_generated(root,data_root(),director_plan['id'],shot_id)
             shutil.copyfile(source,target);relative_path=target.relative_to(root)
             preview={'filename':target.name,'subfolder':relative_path.parent.as_posix(),'type':'output','format':'video/h264-mp4','frame_rate':kwargs.get('frame_rate',24)}
@@ -42,7 +43,20 @@ class Star7DirectorSaveVideo:
             # Only this freshly-created UUID staging directory is removed.
             if private.is_relative_to(temp_root) and private.parent.name=='star7-director-staging':shutil.rmtree(private)
 
-def encode_mp4(path,images,audio=None,frame_rate=24,crf=19):
+def encode_mp4(path,images,audio=None,frame_rate=24,crf=19,encoder='cpu',preset='medium'):
+    from .encoding_backend import choose_encoder,HardwareEncoderUnavailable,LOG
+    shape=getattr(images,'shape',None)
+    if not shape or len(shape)!=4 or shape[0]<1 or shape[3] not in (3,4):raise ValueError('视频编码需要非空的 NHWC RGB 图像')
+    selected=choose_encoder('h264-mp4',encoder,quality=crf,width=shape[2],height=shape[1])
+    try:return _encode_mp4(path,images,audio,frame_rate,crf,selected,preset)
+    except HardwareEncoderUnavailable:
+        if encoder!='auto':raise
+        LOG.warning('Star7 video encode | hardware initialization failed; retrying with CPU H.264')
+        Path(path).unlink(missing_ok=True)
+        return _encode_mp4(path,images,audio,frame_rate,crf,'libx264',preset)
+
+
+def _encode_mp4(path,images,audio,frame_rate,crf,codec,preset):
     import av,numpy as np,logging,time
     started=time.perf_counter();conversion_seconds=0.0
     shape=getattr(images,'shape',None)
@@ -53,11 +67,14 @@ def encode_mp4(path,images,audio=None,frame_rate=24,crf=19):
     if not 0<rate<=120 or not 0<=int(crf)<=51:raise ValueError('视频编码帧率或 CRF 无效')
     def numpy(value):return value.detach().cpu().numpy() if hasattr(value,'detach') else np.asarray(value)
     log=logging.getLogger('Star7DirectorEncode')
-    log.info('Star7 video encode | codec=libx264 (CPU) | %dx%d frames=%d fps=%s | frame_source=%s',width,height,count,rate,type(images).__name__)
+    log.info('Star7 video encode | codec=%s | %dx%d frames=%d fps=%s | frame_source=%s',codec,width,height,count,rate,type(images).__name__)
     with av.open(str(path),'w',format='mp4',options={'movflags':'+faststart'}) as container:
-        video=container.add_stream('libx264',rate=rate)
+        video=container.add_stream(codec,rate=rate)
         video.width=int(width);video.height=int(height);video.pix_fmt='yuv420p'
-        video.options={'crf':str(int(crf)),'preset':'medium'}
+        if codec.endswith('_nvenc'):
+            from .encoding_backend import nvenc_options
+            video.bit_rate=0;video.options=nvenc_options(crf,preset)
+        else:video.options={'crf':str(int(crf)),'preset':preset}
         sound=None;waveform=None
         if audio is not None:
             sample_rate=int(audio.get('sample_rate',0));waveform=audio.get('waveform')
@@ -76,6 +93,11 @@ def encode_mp4(path,images,audio=None,frame_rate=24,crf=19):
                 encoding_rate=sample_rate if sample_rate in (8000,11025,12000,16000,22050,24000,32000,44100,48000,64000,88200,96000) else 48000
                 sound=container.add_stream('aac',rate=encoding_rate);sound.layout=layout;sound.bit_rate=192000
                 resampler=av.AudioResampler(format='fltp',layout=layout,rate=encoding_rate)
+        try:container.start_encoding()
+        except av.FFmpegError as error:
+            if not codec.endswith('_nvenc'):raise
+            from .encoding_backend import HardwareEncoderUnavailable
+            raise HardwareEncoderUnavailable('GPU video encoder initialization failed: '+str(error)) from error
         for index in range(int(count)):
             import comfy.model_management
             comfy.model_management.throw_exception_if_processing_interrupted()
